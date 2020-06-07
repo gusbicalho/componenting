@@ -1,0 +1,6 @@
+cradle:
+  stack:
+    - path: "./componenting/src"
+      component: "componenting:lib"
+    - path: "./componenting/test"
+      component: "componenting:componenting-test"
