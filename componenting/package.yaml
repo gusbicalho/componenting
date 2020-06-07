@@ -1,0 +1,45 @@
+name:                componenting
+version:             0.1.0.0
+github:              "githubuser/componenting"
+author:              "Author name here"
+maintainer:          "example@example.com"
+copyright:           "2020 Author name here"
+
+description:         Please see the README on GitHub at <https://github.com/githubuser/componenting#readme>
+
+defaults:
+  local: ../defaults.yaml
+
+dependencies:
+- base >= 4.7 && < 5
+- text
+
+library:
+  source-dirs: src
+
+executables:
+  componenting-exe:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -O2
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - componenting
+
+tests:
+  componenting-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - componenting
+    - base
+    - hspec
+    - QuickCheck
+    - text
