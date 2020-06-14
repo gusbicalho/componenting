@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 7d7f85bbf179a9f62e47dfadabd723481ceffd1ebb781f9439787056e04913c2
+-- hash: 2aa6505615de10386cc041b3358132104933cb704d7b50ccfe14c94b69a5a72d
 
 name:           componenting
 version:        0.1.0.0
@@ -30,7 +30,12 @@ library
   default-extensions: ApplicativeDo BangPatterns ConstraintKinds DataKinds DefaultSignatures DeriveAnyClass DeriveFoldable DeriveFunctor DeriveGeneric DeriveLift DeriveTraversable DerivingStrategies EmptyCase ExistentialQuantification FlexibleContexts FlexibleInstances FunctionalDependencies GADTs GeneralizedNewtypeDeriving InstanceSigs KindSignatures LambdaCase MultiParamTypeClasses MultiWayIf NamedFieldPuns OverloadedLabels OverloadedStrings PatternSynonyms RankNTypes ScopedTypeVariables StandaloneDeriving TupleSections TypeApplications TypeFamilies TypeFamilyDependencies TypeOperators ViewPatterns
   ghc-options: -Wall -Wcompat -Wincomplete-record-updates -Wincomplete-uni-patterns -Wredundant-constraints -foptimal-applicative-do
   build-depends:
-      base >=4.7 && <5
+      async
+    , base >=4.7 && <5
+    , constraints
+    , generic-lens
+    , lens
+    , row-types
     , text
   default-language: Haskell2010
 
@@ -48,8 +53,13 @@ test-suite componenting-test
   ghc-options: -Wall -Wcompat -Wincomplete-record-updates -Wincomplete-uni-patterns -Wredundant-constraints -foptimal-applicative-do -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       QuickCheck
+    , async
     , base
     , componenting
+    , constraints
+    , generic-lens
     , hspec
+    , lens
+    , row-types
     , text
   default-language: Haskell2010

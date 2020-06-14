@@ -8,3 +8,6 @@ resolver: nightly-2020-06-06
 
 packages:
 - componenting
+
+extra-deps:
+- row-types-0.4.0.0@sha256:adf9dcf41e44e61c443a02cb9927740ea211e4cf60e68fb9d7b312da7bdd33be,3579
