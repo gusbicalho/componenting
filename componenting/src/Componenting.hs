@@ -90,27 +90,40 @@ startedSystemWithSingleComponent :: IO (RunningSystem ("config" .== ConfigImpl)
                                        (WithMeta ("config" :-> ()) ("config" :-> ConfigImpl)))
 startedSystemWithSingleComponent = startSystem $ System $ #config :-> ConfigImplDef "5000000"
 
-helloSystem :: System ("config" :-> ConfigImplDef
-                   :>> "printLoop" :-> PrintLoopDef)
-helloSystem = System $ #config :-> ConfigImplDef "5000000"
-                   ~>> #printLoop :-> PrintLoopDef "Hello!"
+helloSystem :: System ("myConfig" :-> ConfigImplDef
+                   :>> "printLoop" :-> (RenamingDep
+                                         "myConfig"
+                                         "config"
+                                         PrintLoopDef))
+helloSystem = System $ #myConfig :-> ConfigImplDef "5000000"
+                   ~>> #printLoop :-> (PrintLoopDef "Hello!"
+                                       & renamingDep @"myConfig" @"config")
 
-startedHelloSystem :: IO (RunningSystem ("config" .== ConfigImpl
+startedHelloSystem :: IO (RunningSystem ("myConfig" .== ConfigImpl
                                       .+ "printLoop" .== PrintLoop)
-                                      (WithMeta ("printLoop" :-> ()) ("printLoop" :-> PrintLoop)
-                                       :<< WithMeta ("config" :-> ()) ("config" :-> ConfigImpl)))
+                                        (WithMeta
+                                          ("printLoop" :-> RenamingDep "config" "myConfig" ())
+                                          ("printLoop" :-> PrintLoop)
+                                        :<< WithMeta
+                                              ("myConfig" :-> ())
+                                              ("myConfig" :-> ConfigImpl)))
 startedHelloSystem = startSystem helloSystem
 
-byeSystem :: System ("config" :-> ConfigImplDef
-                 :>> "printLoop" :-> PrintLoopDef)
+byeSystem :: _
 byeSystem = helloSystem
             & replace (#printLoop :-> PrintLoopDef "Bye!")
+
+startedByeSystem :: _
+startedByeSystem = helloSystem
+                   & replace (#printLoop :-> (PrintLoopDef "Bye!"
+                                              & renamingDep @"myConfig" @"config"))
+                   & startSystem
 
 startAndStopSystem :: IO Bool
 startAndStopSystem = do
   running <- startSystem helloSystem
   let components = getComponents running
-  let (ConfigImpl _ n) = components .! #config
+  let (ConfigImpl _ n) = components .! #myConfig
   putStrLn $ "We can get data from the config component: " <> show n
   stopped <- stopSystem running
   pure $ stopped == helloSystem

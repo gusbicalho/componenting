@@ -2,7 +2,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Componenting.System
   ( System (..), (:>>), (~>>), (:->) (..), replace
-  , RunningSystem, (:<<), WithMeta
+  , RunningSystem, (:<<), WithMeta, RenamingDep, renamingDep
   , startSystem, stopSystem, getComponents
   ) where
 
@@ -56,6 +56,10 @@ stopSystem s@(RunningSystem _ _) = stop s
 
 getComponents :: RunningSystem startedComponents stopStack -> Rec startedComponents
 getComponents (RunningSystem comps _) = comps
+
+renamingDep :: forall (fromLabel :: Symbol) (toLabel :: Symbol) component.
+               component -> RenamingDep fromLabel toLabel component
+renamingDep = RenamingDep
 
 -- Build the dependency list normalizing so they associate to the left
 class ConcatDeps front back where
