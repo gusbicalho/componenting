@@ -1,7 +1,7 @@
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# OPTIONS_GHC -Wno-partial-type-signatures #-}
 {-# LANGUAGE UndecidableInstances #-}
-module Componenting where
+module Componenting.Examples where
 
 import Data.Function ((&))
 import Data.Row
