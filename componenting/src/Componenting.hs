@@ -3,7 +3,6 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Componenting where
 
-import Data.Constraint (top)
 import Data.Kind
 import Data.Row
 import qualified Data.Row.Records as Rec
@@ -16,6 +15,8 @@ import Control.Concurrent (threadDelay)
 import Control.Monad (forever)
 import GHC.OverloadedLabels (IsLabel(..))
 import GHC.TypeLits
+import Componenting.Component
+import Componenting.System
 
 a :: ((r .! "x") ~ Int) => Rec r -> Int
 a p = p .! #x :: Int
@@ -24,47 +25,32 @@ a p = p .! #x :: Int
 -- b :: Rec ('Data.Row.Internal.R '[ "x" 'Data.Row.Internal.:-> Int])
 b = #x .== (42 :: Int)
 
-newtype Some (constraint :: Type -> Constraint) =
-  Some { getSome :: forall x. (constraint x) => x }
-
-class StartComponent
-    stoppedComp
-    runningComp
-    dependenciesRowConstraint
-    | stoppedComp -> runningComp
-    , stoppedComp -> dependenciesRowConstraint
-  where
-  start :: dependenciesRowConstraint dependenciesRow => Rec dependenciesRow -> stoppedComp -> IO runningComp
-
-class StopComponent
-    stoppedComp
-    runningComp
-  where
-  stop :: runningComp -> IO stoppedComp
-
-class AtLeast (minRow :: Row Type) (row :: Row Type) where
-instance (Subset minRow row) => AtLeast minRow row where
-
 -- Config
 
 class Config t where
   configInterval :: t -> Int
 
 data ConfigImplDef = ConfigImplDef String
+  deriving (Eq)
 data ConfigImpl = ConfigImpl String Int
+  deriving (Eq)
 
 instance StartComponent
     ConfigImplDef
     ConfigImpl
-    (AtLeast Empty)
+    deps
   where
-    start _ (ConfigImplDef s) = pure $ ConfigImpl s (read s)
+    start _ (ConfigImplDef s) = do
+      putStrLn "Starting ConfigImpl"
+      pure $ ConfigImpl s (read s)
 
 instance StopComponent
     ConfigImplDef
     ConfigImpl
   where
-    stop (ConfigImpl s _) = pure $ ConfigImplDef s
+    stop (ConfigImpl s _) = do
+      putStrLn "Stopping ConfigImpl"
+      pure $ ConfigImplDef s
 
 instance Config ConfigImpl where
   configInterval (ConfigImpl _ n) = n
@@ -72,16 +58,19 @@ instance Config ConfigImpl where
 -- PrintLoop
 
 data PrintLoopDef = PrintLoopDef String
+  deriving (Eq)
 data PrintLoop = PrintLoop String (Async.Async ())
+  deriving (Eq)
 
 instance
-  (deps ~ AtLeast ("config" .== Some Config)) =>
+  ((deps .! "config") ~ config, Config config) =>
   StartComponent
     PrintLoopDef
     PrintLoop
-    deps
+    (Rec deps)
   where
     start deps (PrintLoopDef s) = do
+      putStrLn "Starting PrintLoop"
       let config = deps .! #config
       let interval = configInterval config
       task <- Async.async $ forever $ do
@@ -94,76 +83,30 @@ instance StopComponent
     PrintLoop
   where
     stop (PrintLoop s task) = do
+      putStrLn "Stopping PrintLoop"
       Async.cancel task
       pure $ PrintLoopDef s
 
 -- System
 
-data (label :: Symbol) :-> component = Label label :-> component
+singleLabeledComponent :: IO ("config" :-> ConfigImpl)
+singleLabeledComponent = start empty $ #config :-> ConfigImplDef "5000000"
 
-data system :>> component = system :>> component
-infixl 6 :>>
+systemWithSingleComponent :: IO (RunningSystem ("config" .== ConfigImpl)
+                                               ("config" :-> ConfigImpl))
+systemWithSingleComponent = start empty $ System $ #config :-> ConfigImplDef "5000000"
 
-data runningComponent :<< runningDeps = runningComponent :<< runningDeps
-infixl 6 :<<
+helloSystem :: System (("config" :-> ConfigImplDef) :>> ("printLoop" :-> PrintLoopDef))
+helloSystem = System $ #config :-> ConfigImplDef "5000000"
+                   ~>> #printLoop :-> PrintLoopDef "Hello!"
 
-data RunningSystem runningComponents stopStack =
-  RunningSystem (Rec runningComponents) stopStack
+byeSystem :: System (("config" :-> ConfigImplDef) :>> ("printLoop" :-> PrintLoopDef))
+byeSystem = helloSystem
+            & replace (#printLoop :-> PrintLoopDef "Bye!")
 
-data EmptySystem = EmptySystem
-
-instance StartComponent
-    EmptySystem
-    (RunningSystem Empty EmptySystem)
-    (AtLeast Empty)
-  where
-    start _ _ = pure $ RunningSystem Empty EmptySystem
-
-instance
-  ( StartComponent stoppedComponent startedComponent runningDeps
-  ) =>
-  StartComponent
-    (label :-> stoppedComponent)
-    (label :-> startedComponent)
-    runningDeps
-  where
-    start runningDeps (label :-> stoppedComponent) = do
-      startedComponent <- start runningDeps stoppedComponent
-      pure $ label :-> startedComponent
-
-
-instance
-  ( StartComponent stoppedDepsSystem (RunningSystem runningDeps stopStack) (AtLeast Empty)
-  , StartComponent stoppedComponent (label :-> runningComponent) (AtLeast runningDeps)
-  , startedSystem ~ (RunningSystem (runningDeps .+ label .== runningComponent)
-                                   (runningComponent :<< stopStack))
-  ) =>
-  StartComponent
-    (stoppedDepsSystem :>> stoppedComponent)
-    startedSystem
-    (AtLeast Empty)
-  where
-    -- start :: () -> (stoppedDepsSystem :>> stoppedComponent) -> IO startedSystem
-    start outerDeps (stoppedDeps :>> stoppedComponent) = do
-      RunningSystem deps stopStack <- start outerDeps stoppedDeps
-      (label :-> component) <- start deps stoppedComponent
-      pure $ RunningSystem (deps .+ label .== component) (component :<< stopStack)
-
-
--- s1 :: IO (RunningSystem ("config" .== ConfigImpl) (ConfigImpl :<< ()))
--- s1 :: IO (Rec ("config" .== ConfigImpl))
-s1 :: IO ("config" :-> ConfigImpl)
-s1 = start Empty $ #config :-> ConfigImplDef "5000000"
-
-s2 :: IO (RunningSystem ("config" .== ConfigImpl)
-                        (ConfigImpl :<< EmptySystem))
-s2 = start Empty $ EmptySystem
-                :>> #config :-> ConfigImplDef "5000000"
-
-system :: _
-system = EmptySystem
-     :>> #config :-> ConfigImplDef "5000000"
-     :>> #printLoop :-> PrintLoopDef "Hello!"
-
--- Now all I have to do is find a way to wrap ConfigImpl in Some with a helper
-system' = start Empty system
+startAndStopSystem :: IO Bool
+startAndStopSystem = do
+  running <- start empty helloSystem
+  stopped <- stop running
+  pure $ stopped == helloSystem
+  -- True

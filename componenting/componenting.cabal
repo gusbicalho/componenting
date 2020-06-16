@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 2aa6505615de10386cc041b3358132104933cb704d7b50ccfe14c94b69a5a72d
+-- hash: 995e7d893eda8de02c94209ac2a9ca32afcb2f65c6fe557f33ada0b0b9a43d1d
 
 name:           componenting
 version:        0.1.0.0
@@ -23,6 +23,8 @@ source-repository head
 library
   exposed-modules:
       Componenting
+      Componenting.Component
+      Componenting.System
   other-modules:
       Paths_componenting
   hs-source-dirs:
@@ -44,6 +46,8 @@ test-suite componenting-test
   main-is: Spec.hs
   other-modules:
       Componenting
+      Componenting.Component
+      Componenting.System
       ComponentingSpec
       Paths_componenting
   hs-source-dirs:
