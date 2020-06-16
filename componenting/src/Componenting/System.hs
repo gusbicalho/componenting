@@ -2,12 +2,13 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Componenting.System
   ( System (..), (:>>), (~>>), (:->) (..), replace
-  , RunningSystem, (:<<)
-  , components
+  , RunningSystem, (:<<), WithMeta
+  , startSystem, stopSystem, getComponents
   ) where
 
 import Componenting.Component
 import Data.Row
+import Data.Row.Records
 import GHC.TypeLits
 
 -- System data types
@@ -31,14 +32,30 @@ infixl 6 :>>
 
 -- | Connects running coponent to their running dependencies.
 -- Used to build a stack, stored in the running system, which allows us to
--- stop things in order - first a component, then their dependencies.
+-- stopWithMeta things in order - first a component, then their dependencies.
 data startedComponent :<< runningDeps = startedComponent :<< runningDeps
   deriving (Eq)
 infixl 6 :<<
 
--- Public fns
-components :: RunningSystem startedComponents stopStack -> Rec startedComponents
-components (RunningSystem comps _) = comps
+-- | Each item in the :<< stack is annotated with meta
+data WithMeta meta component = WithMeta meta component
+  deriving (Eq)
+
+newtype RenamingDep (fromLabel :: Symbol) (toLabel :: Symbol) component
+  = RenamingDep component
+  deriving (Eq)
+
+-- Public helpers
+startSystem :: StartComponent (System components) startedSystem meta (Rec Empty)
+            => System components -> IO startedSystem
+startSystem s@(System _) = start empty s
+
+stopSystem :: StopComponent stoppedComponents stopStack ()
+           => RunningSystem startedComponents stopStack -> IO (System stoppedComponents)
+stopSystem s@(RunningSystem _ _) = stop s
+
+getComponents :: RunningSystem startedComponents stopStack -> Rec startedComponents
+getComponents (RunningSystem comps _) = comps
 
 -- Build the dependency list normalizing so they associate to the left
 class ConcatDeps front back where
@@ -121,90 +138,140 @@ instance
   where
     replace newComponent (System (deps :>> _)) = System (deps :>> newComponent)
 
--- Labeled component instances
+-- Wrap a component to rename the dependencies they get
+
 instance
-  ( StartComponent stoppedComponent startedComponent runningDeps
+  ( KnownSymbol fromLabel, KnownSymbol toLabel
+  , renamedDeps ~ Rename fromLabel toLabel deps
+  , StartComponent stoppedComp startedComp meta (Rec renamedDeps)) =>
+  StartComponent
+    (RenamingDep fromLabel toLabel stoppedComp)
+    startedComp
+    (RenamingDep toLabel fromLabel meta)
+    (Rec deps)
+  where
+    startWithMeta deps (RenamingDep stoppedComp) = do
+      (meta, startedComp) <- startWithMeta renamedDeps stoppedComp
+      pure $ (RenamingDep @toLabel @fromLabel meta, startedComp)
+      where
+        renamedDeps = rename (Label @fromLabel) (Label @toLabel) deps
+
+instance
+  ( StopComponent stoppedComp startedComp meta ) =>
+  StopComponent
+    (RenamingDep fromLabel toLabel stoppedComp)
+    startedComp
+    (RenamingDep toLabel fromLabel meta)
+  where
+    stopWithMeta (RenamingDep meta) startedComp = do
+      stoppedComp <- stopWithMeta meta startedComp
+      pure $ RenamingDep @fromLabel @toLabel stoppedComp
+
+instance
+  ( StartComponent stoppedComponent startedComponent meta runningDeps
   ) =>
   StartComponent
     (label :-> stoppedComponent)
     (label :-> startedComponent)
+    (label :-> meta)
     runningDeps
   where
-    start runningDeps (label :-> stoppedComponent) = do
-      startedComponent <- start runningDeps stoppedComponent
-      pure $ label :-> startedComponent
+    startWithMeta runningDeps (label :-> stoppedComponent) = do
+      (meta, startedComponent) <- startWithMeta runningDeps stoppedComponent
+      pure $ (label :-> meta, label :-> startedComponent)
 
 instance
-  ( StopComponent stoppedComponent startedComponent
+  ( StopComponent stoppedComponent startedComponent meta
   ) =>
   StopComponent
     (label :-> stoppedComponent)
     (label :-> startedComponent)
+    (label :-> meta)
   where
-    stop (label :-> startedComponent) = do
-      stoppedComponent <- stop startedComponent
+    stopWithMeta (_ :-> meta) (label :-> startedComponent) = do
+      stoppedComponent <- stopWithMeta meta startedComponent
       pure $ label :-> stoppedComponent
 
 -- System instances
 
--- Start the system - Base case - system with a single labeled component
+-- StartWithMeta the system - Base case - system with a single labeled component
 instance
-  ( StartComponent stoppedComponent startedComponent componentDeps
+  ( StartComponent stoppedComponent startedComponent meta componentDeps
   , runningSystemRow ~ (label .== startedComponent)
   , KnownSymbol label
   ) =>
   StartComponent
     (System (label :-> stoppedComponent))
-    (RunningSystem runningSystemRow (label :-> startedComponent))
+    (RunningSystem runningSystemRow (WithMeta (label :-> meta) (label :-> startedComponent)))
+    ()
     componentDeps
   where
-    start deps (System (label :-> stoppedComponent)) = do
-      startedComponent <- start deps stoppedComponent
-      pure $ RunningSystem (label .== startedComponent)
-                           (label :-> startedComponent)
+    startWithMeta deps (System (label :-> stoppedComponent)) = do
+      (meta, startedComponent) <- startWithMeta deps stoppedComponent
+      pure $ ((), RunningSystem (label .== startedComponent)
+                                (WithMeta (label :-> meta) (label :-> startedComponent)))
 
--- Start the system - Recursive case - system with parts connected by :>>
+-- StartWithMeta the system - Recursive case - system with parts connected by :>>
 instance
   ( StartComponent (System stoppedDepsSystem)
                    (RunningSystem runningDeps stopStack)
+                   ()
                    systemDeps
   , StartComponent stoppedComponent
                    (label :-> startedComponent)
+                   meta
                    (Rec runningDeps)
   , KnownSymbol label
   , startedSystem ~ (RunningSystem (runningDeps .+ label .== startedComponent)
-                                   ((label :-> startedComponent) :<< stopStack))
+                                   (WithMeta meta (label :-> startedComponent) :<< stopStack))
   ) =>
   StartComponent
     (System (stoppedDepsSystem :>> stoppedComponent))
     startedSystem
+    ()
     systemDeps
   where
-    start outerDeps (System (stoppedDeps :>> stoppedComponent)) = do
-      RunningSystem deps stopStack <- start outerDeps (System stoppedDeps)
-      (label :-> component) <- start deps stoppedComponent
-      pure $ RunningSystem (deps .+ label .== component) ((label :-> component) :<< stopStack)
+    startWithMeta outerDeps (System (stoppedDeps :>> stoppedComponent)) = do
+      ((), RunningSystem deps stopStack) <- startWithMeta outerDeps (System stoppedDeps)
+      (meta, label :-> component) <- startWithMeta deps stoppedComponent
+      pure $ ((), RunningSystem (deps .+ label .== component)
+                                (WithMeta meta (label :-> component) :<< stopStack))
 
--- Stop system - traversing the :<< stack
+-- StopWithMeta system - base case of the :<< stack
 instance
-  ( StopComponent stoppedComponent startedComponent
-  , StopComponent stoppedDeps runningDeps
+  ( StopComponent stoppedComponent startedComponent meta
+  ) =>
+  StopComponent
+    stoppedComponent
+    (WithMeta meta startedComponent)
+    ()
+  where
+    stopWithMeta () (WithMeta meta startedComponent) = do
+      stoppedComponent <- stopWithMeta meta startedComponent
+      pure $ stoppedComponent
+
+-- StopWithMeta system - traversing the :<< stack
+instance
+  ( StopComponent stoppedComponent startedComponent meta
+  , StopComponent stoppedDeps runningDeps ()
   ) =>
   StopComponent
     (stoppedDeps :>> stoppedComponent)
-    (startedComponent :<< runningDeps)
+    ((WithMeta meta startedComponent) :<< runningDeps)
+    ()
   where
-    stop (startedComponent :<< runningDeps) = do
-      stoppedComponent <- stop startedComponent
-      stoppedDeps <- stop runningDeps
+    stopWithMeta () ((WithMeta meta startedComponent) :<< runningDeps) = do
+      stoppedComponent <- stopWithMeta meta startedComponent
+      stoppedDeps <- stopWithMeta () runningDeps
       pure $ stoppedDeps :>> stoppedComponent
 
--- Stop system -- root instance - delegates to the instance that traverses the stack
+-- StopWithMeta system -- root instance - delegates to the instance that traverses the stack
 instance
-  ( StopComponent stoppedComponents stopStack
+  ( StopComponent stoppedComponents stopStack ()
   ) =>
   StopComponent
     (System stoppedComponents)
     (RunningSystem components stopStack)
+    ()
   where
-    stop (RunningSystem _ stopStack) = System <$> stop stopStack
+    stopWithMeta () (RunningSystem _ stopStack) = System <$> stopWithMeta () stopStack
