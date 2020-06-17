@@ -1,7 +1,7 @@
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# OPTIONS_GHC -Wno-partial-type-signatures #-}
 {-# LANGUAGE UndecidableInstances #-}
-module Componenting.Examples where
+module Componenting.Examples.ComponentTypeclasses where
 
 import Data.Function ((&))
 import Data.Row
@@ -9,8 +9,7 @@ import Data.Generics.Labels ()
 import qualified Control.Concurrent.Async as Async
 import Control.Concurrent (threadDelay)
 import Control.Monad (forever)
-import Componenting.Component
-import Componenting.System
+import Componenting
 
 -- Config
 

@@ -1,4 +1,9 @@
-module Componenting.Component where
+{-# LANGUAGE UndecidableInstances #-}
+{-# language UndecidableSuperClasses #-}
+module Componenting.Component
+  ( StartComponent (..)
+  , StopComponent (..), stop
+  ) where
 
 class StartComponent
     stoppedComp
