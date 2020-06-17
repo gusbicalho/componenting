@@ -17,41 +17,59 @@ import Componenting.System
 class Config t where
   configInterval :: t -> Int
 
+-- Stopped component
 data ConfigImplDef = ConfigImplDef String
   deriving (Eq)
+-- Started component
 data ConfigImpl = ConfigImpl String Int
   deriving (Eq)
 
 instance StartComponent
-    ConfigImplDef
-    ConfigImpl
-    ()
-    deps
+    ConfigImplDef -- We can call `start` on a ConfigImplDef value
+    ConfigImpl    -- To get a ConfigImpl value
+    ()            -- And an empty metadata. This metadata is stored in the system
+                  -- after we start the component, but is not accessible by client
+                  -- code. It is used to `stop` the component when the system is
+                  -- stopped.
+                  -- Since the metadata here is simply (), we can implement only
+                  -- the `start` method of the typeclass, instead of the more
+                  -- verbose `startWithMeta`. `startWithMeta` has a default
+                  -- implementation when the metadata is ().
+    deps          -- We don't require any dependencies to do that, so the `deps`
+                  -- parameter can be anything
   where
     start _ (ConfigImplDef s) = do
       putStrLn "Starting ConfigImpl"
       pure $ ConfigImpl s (read s)
 
 instance StopComponent
-    ConfigImplDef
+    ConfigImplDef -- If we `stop` a ConfigImpl value, we get a ConfgiImplDef back
     ConfigImpl
-    ()
+    ()            -- We don't expect any metadata to stop a ConfigImpl
   where
     stopWithMeta _ (ConfigImpl s _) = do
       putStrLn "Stopping ConfigImpl"
       pure $ ConfigImplDef s
 
+-- ConfigImpl values (which correspond to the started component) implement
+-- the Config interface
 instance Config ConfigImpl where
   configInterval (ConfigImpl _ n) = n
 
 -- PrintLoop
 
+-- Stopped component
 data PrintLoopDef = PrintLoopDef String
   deriving (Eq)
+-- Started component
 data PrintLoop = PrintLoop String (Async.Async ())
   deriving (Eq)
 
 instance
+  -- To start a PrintLoopDef value and get a PrintLoop value, we need some dependencies
+  -- The `dependencies` parameter can be any Rec (from Data.Row.Record)
+  -- which includes a "config" field, as long as the type of
+  -- that "config" field implements the Config typeclass.
   ((deps .! "config") ~ config, Config config) =>
   StartComponent
     PrintLoopDef
@@ -86,6 +104,11 @@ singleLabeledComponent = start empty $ #config :-> ConfigImplDef "5000000"
 systemWithSingleComponent :: System ("config" :-> ConfigImplDef)
 systemWithSingleComponent = System $ #config :-> ConfigImplDef "5000000"
 
+-- The full signature for a running system system is complicated, because it includes
+-- a stack of initialized components in the order they must be stopped if the system
+-- is stopped, along with metadata which must be provided when we stop the component.
+-- However, it can be fully inferred, and PartialTypeSignatures can be used to
+-- avoid typing them in top-level definitions (see `byeSystem` below)
 startedSystemWithSingleComponent :: IO (RunningSystem ("config" .== ConfigImpl)
                                        (WithMeta ("config" :-> ()) ("config" :-> ConfigImpl)))
 startedSystemWithSingleComponent = startSystem $ System $ #config :-> ConfigImplDef "5000000"
