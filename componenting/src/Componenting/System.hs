@@ -1,4 +1,5 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Componenting.System
   ( System (..), (:>>), (~>>), (:->) (..), replace
@@ -7,6 +8,7 @@ module Componenting.System
   ) where
 
 import Componenting.Component
+import Data.Kind
 import Data.Row
 import Data.Row.Records
 import GHC.TypeLits
@@ -46,9 +48,11 @@ newtype RenamingDep (fromLabel :: Symbol) (toLabel :: Symbol) component
   deriving (Eq)
 
 -- Public helpers
-startSystem :: StartComponent (System components) startedSystem meta (Rec Empty)
+
+startSystem :: ( AllComponentsLabeled components -- for better type errors
+               , StartComponent (System components) startedSystem meta (Rec Empty) )
             => System components -> IO startedSystem
-startSystem s@(System _) = start empty s
+startSystem = start empty
 
 stopSystem :: StopComponent stoppedComponents stopStack ()
            => RunningSystem startedComponents stopStack -> IO (System stoppedComponents)
@@ -60,6 +64,36 @@ getComponents (RunningSystem comps _) = comps
 renamingDep :: forall (fromLabel :: Symbol) (toLabel :: Symbol) component.
                component -> RenamingDep fromLabel toLabel component
 renamingDep = RenamingDep
+
+-- Well-formed system
+type family AllComponentsLabeled t :: Constraint where
+  AllComponentsLabeled (a :>> b) = (AllComponentsLabeled a, AllComponentsLabeled b)
+  AllComponentsLabeled (_ :-> _) = ()
+  AllComponentsLabeled c =
+    TypeError ('Text "All components in a System must be labeled, but this is not: " ':<>:
+               'ShowType c)
+
+type family NoDuplicateLabels t :: Constraint where
+  NoDuplicateLabels t = NoDuplicateLabelsGo '[] (CollectLabels t)
+
+-- TODO get this from some lib
+type family If (cond :: Bool) (thenT :: k) (elseT :: k) :: k where
+  If 'True thenT _ = thenT
+  If 'False _ elseT = elseT
+
+-- TODO use some type-level set to avoid n^2
+type family CollectLabels t :: [Symbol] where
+  CollectLabels (label :-> _) = [label]
+  CollectLabels (a :>> b) = CollectLabels a '++ CollectLabels b
+  CollectLabels _ = []
+
+type family LabelKnown (knownLabels :: [Symbol]) (label :: Symbol) where
+  LabelKnown '[] _ = 'False
+  LabelKnown (l ': ls) l = 'True
+  LabelKnown (_ ': ls) l = LabelKnown ls l
+
+type family NoDuplicateLabelsGo (knownLabels :: [Symbol]) (moreLabels :: [Symbol]) :: Constraint
+  -- NoDuplicateLabelsGo ls (a :>> b)
 
 -- Build the dependency list normalizing so they associate to the left
 class ConcatDeps front back where
@@ -171,6 +205,7 @@ instance
       stoppedComp <- stopWithMeta meta startedComp
       pure $ RenamingDep @fromLabel @toLabel stoppedComp
 
+-- Start labeled components
 instance
   ( StartComponent stoppedComponent startedComponent meta runningDeps
   ) =>
@@ -217,7 +252,8 @@ instance
 
 -- StartWithMeta the system - Recursive case - system with parts connected by :>>
 instance
-  ( StartComponent (System stoppedDepsSystem)
+  ( AllComponentsLabeled (stoppedDepsSystem :>> stoppedComponent)
+  , StartComponent (System stoppedDepsSystem)
                    (RunningSystem runningDeps stopStack)
                    ()
                    systemDeps
@@ -271,8 +307,7 @@ instance
 
 -- StopWithMeta system -- root instance - delegates to the instance that traverses the stack
 instance
-  ( StopComponent stoppedComponents stopStack ()
-  ) =>
+  (StopComponent stoppedComponents stopStack ()) =>
   StopComponent
     (System stoppedComponents)
     (RunningSystem components stopStack)

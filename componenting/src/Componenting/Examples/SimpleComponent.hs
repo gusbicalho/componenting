@@ -127,3 +127,12 @@ startAndStopSystem = do
   putStrLn $ "We can get data from the config component: " <> show n
   stopSystem running
   pure ()
+
+unlabeled = System $ #myConfig :-> newConfigComponent "5000000"
+                   ~>> newConfigComponent "2"
+                   ~>> #printLoop :-> (newPrintLoopComponent "Hello!"
+                                       & renamingDep @"myConfig" @"config")
+
+unlabeled2 = System $ newConfigComponent "2"
+
+startedU2 = startSystem unlabeled2
