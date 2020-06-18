@@ -101,7 +101,7 @@ singleLabeledComponent :: IO ("config" :-> ConfigImpl)
 singleLabeledComponent = start empty $ #config :-> ConfigImplDef "5000000"
 
 systemWithSingleComponent :: System ("config" :-> ConfigImplDef)
-systemWithSingleComponent = System $ #config :-> ConfigImplDef "5000000"
+systemWithSingleComponent = system $ #config :-> ConfigImplDef "5000000"
 
 -- The full signature for a running system system is complicated, because it includes
 -- a stack of initialized components in the order they must be stopped if the system
@@ -110,14 +110,14 @@ systemWithSingleComponent = System $ #config :-> ConfigImplDef "5000000"
 -- avoid typing them in top-level definitions (see `byeSystem` below)
 startedSystemWithSingleComponent :: IO (RunningSystem ("config" .== ConfigImpl)
                                        (WithMeta ("config" :-> ()) ("config" :-> ConfigImpl)))
-startedSystemWithSingleComponent = startSystem $ System $ #config :-> ConfigImplDef "5000000"
+startedSystemWithSingleComponent = startSystem $ system $ #config :-> ConfigImplDef "5000000"
 
 helloSystem :: System ("myConfig" :-> ConfigImplDef
                    :>> "printLoop" :-> (RenamingDep
                                          "myConfig"
                                          "config"
                                          PrintLoopDef))
-helloSystem = System $ #myConfig :-> ConfigImplDef "5000000"
+helloSystem = system $ #myConfig :-> ConfigImplDef "5000000"
                    ~>> #printLoop :-> (PrintLoopDef "Hello!"
                                        & renamingDep @"myConfig" @"config")
 

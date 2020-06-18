@@ -2,61 +2,47 @@
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Componenting.System
-  ( System (..), (:>>), (~>>), (:->) (..), replace
+  ( System, system, (:>>), (~>>), (:->) (..), replace
   , RunningSystem, (:<<), WithMeta, RenamingDep, renamingDep
   , startSystem, stopSystem, getComponents
   ) where
 
 import Componenting.Component
-import Data.Kind
 import Data.Row
 import Data.Row.Records
 import GHC.TypeLits
+import Componenting.Internal.System.Types
+import Componenting.Internal.System.Validation
 
--- System data types
 newtype System components = System components
   deriving (Eq)
 
 data RunningSystem startedComponents stopStack =
   RunningSystem (Rec startedComponents) stopStack
 
--- Data types for building the graph and stack
-
--- | Labels a component
-data (label :: Symbol) :-> component = Label label :-> component
+newtype RenamingDep (fromLabel :: Symbol) (toLabel :: Symbol) component
+  = RenamingDep component
   deriving (Eq)
-
--- | Connects stopped dependencies to the next component, which may depend on
--- them. Main building block of the System definition.
-data system :>> component = system :>> component
-  deriving (Eq)
-infixl 6 :>>
-
--- | Connects running coponent to their running dependencies.
--- Used to build a stack, stored in the running system, which allows us to
--- stopWithMeta things in order - first a component, then their dependencies.
-data startedComponent :<< runningDeps = startedComponent :<< runningDeps
-  deriving (Eq)
-infixl 6 :<<
 
 -- | Each item in the :<< stack is annotated with meta
 data WithMeta meta component = WithMeta meta component
   deriving (Eq)
 
-newtype RenamingDep (fromLabel :: Symbol) (toLabel :: Symbol) component
-  = RenamingDep component
-  deriving (Eq)
-
 -- Public helpers
 
-startSystem :: ( AllComponentsLabeled components -- for better type errors
-               , StartComponent (System components) startedSystem meta (Rec Empty) )
+startSystem :: StartComponent (System components) startedSystem meta (Rec Empty)
             => System components -> IO startedSystem
 startSystem = start empty
 
 stopSystem :: StopComponent stoppedComponents stopStack ()
            => RunningSystem startedComponents stopStack -> IO (System stoppedComponents)
 stopSystem s@(RunningSystem _ _) = stop s
+
+-- | Smart constructor with helpful type-level checks for better error messages
+system :: ( AllComponentsLabeled components
+          , NoDuplicateLabels components )
+       => components -> System components
+system = System
 
 getComponents :: RunningSystem startedComponents stopStack -> Rec startedComponents
 getComponents (RunningSystem comps _) = comps
@@ -66,34 +52,6 @@ renamingDep :: forall (fromLabel :: Symbol) (toLabel :: Symbol) component.
 renamingDep = RenamingDep
 
 -- Well-formed system
-type family AllComponentsLabeled t :: Constraint where
-  AllComponentsLabeled (a :>> b) = (AllComponentsLabeled a, AllComponentsLabeled b)
-  AllComponentsLabeled (_ :-> _) = ()
-  AllComponentsLabeled c =
-    TypeError ('Text "All components in a System must be labeled, but this is not: " ':<>:
-               'ShowType c)
-
-type family NoDuplicateLabels t :: Constraint where
-  NoDuplicateLabels t = NoDuplicateLabelsGo '[] (CollectLabels t)
-
--- TODO get this from some lib
-type family If (cond :: Bool) (thenT :: k) (elseT :: k) :: k where
-  If 'True thenT _ = thenT
-  If 'False _ elseT = elseT
-
--- TODO use some type-level set to avoid n^2
-type family CollectLabels t :: [Symbol] where
-  CollectLabels (label :-> _) = [label]
-  CollectLabels (a :>> b) = CollectLabels a '++ CollectLabels b
-  CollectLabels _ = []
-
-type family LabelKnown (knownLabels :: [Symbol]) (label :: Symbol) where
-  LabelKnown '[] _ = 'False
-  LabelKnown (l ': ls) l = 'True
-  LabelKnown (_ ': ls) l = LabelKnown ls l
-
-type family NoDuplicateLabelsGo (knownLabels :: [Symbol]) (moreLabels :: [Symbol]) :: Constraint
-  -- NoDuplicateLabelsGo ls (a :>> b)
 
 -- Build the dependency list normalizing so they associate to the left
 class ConcatDeps front back where
@@ -204,32 +162,6 @@ instance
     stopWithMeta (RenamingDep meta) startedComp = do
       stoppedComp <- stopWithMeta meta startedComp
       pure $ RenamingDep @fromLabel @toLabel stoppedComp
-
--- Start labeled components
-instance
-  ( StartComponent stoppedComponent startedComponent meta runningDeps
-  ) =>
-  StartComponent
-    (label :-> stoppedComponent)
-    (label :-> startedComponent)
-    (label :-> meta)
-    runningDeps
-  where
-    startWithMeta runningDeps (label :-> stoppedComponent) = do
-      (meta, startedComponent) <- startWithMeta runningDeps stoppedComponent
-      pure $ (label :-> meta, label :-> startedComponent)
-
-instance
-  ( StopComponent stoppedComponent startedComponent meta
-  ) =>
-  StopComponent
-    (label :-> stoppedComponent)
-    (label :-> startedComponent)
-    (label :-> meta)
-  where
-    stopWithMeta (_ :-> meta) (label :-> startedComponent) = do
-      stoppedComponent <- stopWithMeta meta startedComponent
-      pure $ label :-> stoppedComponent
 
 -- System instances
 

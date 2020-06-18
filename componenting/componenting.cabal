@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 9d737cb24ac54d3dc3760ff5bde3aaba7d7fba6a01af7475e8f44b4accfc1e2c
+-- hash: f567989924046b758206c1c0c8e2db7e790549456348edfd150a5b66e4a474b8
 
 name:           componenting
 version:        0.1.0.0
@@ -27,6 +27,8 @@ library
       Componenting.Constraints
       Componenting.Examples.ComponentTypeclasses
       Componenting.Examples.SimpleComponent
+      Componenting.Internal.System.Types
+      Componenting.Internal.System.Validation
       Componenting.SimpleComponent
       Componenting.System
   other-modules:
@@ -54,6 +56,8 @@ test-suite componenting-test
       Componenting.Constraints
       Componenting.Examples.ComponentTypeclasses
       Componenting.Examples.SimpleComponent
+      Componenting.Internal.System.Types
+      Componenting.Internal.System.Validation
       Componenting.SimpleComponent
       Componenting.System
       Paths_componenting

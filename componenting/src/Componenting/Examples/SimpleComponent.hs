@@ -85,7 +85,7 @@ singleLabeledComponentStarted :: IO ("config" :-> ConfigComponent)
 singleLabeledComponentStarted = start empty $ #config :-> newConfigComponent "5000000"
 
 systemWithSingleComponent :: System ("config" :-> ConfigComponentDef)
-systemWithSingleComponent = System $ #config :-> newConfigComponent "5000000"
+systemWithSingleComponent = system $ #config :-> newConfigComponent "5000000"
 
 -- The full signature for a running system system is complicated, because it includes
 -- a stack of initialized components in the order they must be stopped if the system
@@ -95,12 +95,12 @@ systemWithSingleComponent = System $ #config :-> newConfigComponent "5000000"
 startedSystemWithSingleComponent :: IO (RunningSystem ("config" .== ConfigComponent)
                                        (WithMeta ("config" :-> ())
                                                  ("config" :-> ConfigComponent)))
-startedSystemWithSingleComponent = startSystem $ System $ #config :-> newConfigComponent "5000000"
+startedSystemWithSingleComponent = startSystem $ system $ #config :-> newConfigComponent "5000000"
 
 helloSystem :: System ("myConfig" :-> ConfigComponentDef
                    :>> "printLoop" :-> (RenamingDep "myConfig" "config"
                                           PrintLoopComponentDef))
-helloSystem = System $ #myConfig :-> newConfigComponent "5000000"
+helloSystem = system $ #myConfig :-> newConfigComponent "5000000"
                    ~>> #printLoop :-> (newPrintLoopComponent "Hello!"
                                        & renamingDep @"myConfig" @"config")
 
@@ -127,12 +127,3 @@ startAndStopSystem = do
   putStrLn $ "We can get data from the config component: " <> show n
   stopSystem running
   pure ()
-
-unlabeled = System $ #myConfig :-> newConfigComponent "5000000"
-                   ~>> newConfigComponent "2"
-                   ~>> #printLoop :-> (newPrintLoopComponent "Hello!"
-                                       & renamingDep @"myConfig" @"config")
-
-unlabeled2 = System $ newConfigComponent "2"
-
-startedU2 = startSystem unlabeled2
