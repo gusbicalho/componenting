@@ -1,5 +1,5 @@
 {-# LANGUAGE UndecidableInstances #-}
-module Componenting.Internal.System.Types where
+module Componenting.Internal.System.Graph where
 
 import Componenting.Component
 import Data.Row
@@ -25,6 +25,30 @@ infixl 6 :>>
 data startedComponent :<< runningDeps = startedComponent :<< runningDeps
   deriving (Eq)
 infixl 6 :<<
+
+-- | Build the dependency list normalizing so they associate to the left
+class ConcatDeps front back where
+  (~>>) :: front -> back -> Concated front back
+
+infixl 6 ~>>
+
+type family Concated front back where
+  Concated front (middle :>> back) = Concated front middle :>> back
+  Concated front back = front :>> back
+
+instance
+  {-# OVERLAPPABLE #-}
+  (Concated a b ~ (a :>> b)) =>
+  ConcatDeps a b where
+  a ~>> b = a :>> b
+
+instance
+  {-# OVERLAPPING #-}
+  ( Concated a (b :>> c) ~ (Concated a b :>> c)
+  , ConcatDeps a b
+  ) =>
+  ConcatDeps a (b :>> c) where
+  a ~>> (b :>> c) = (a ~>> b) :>> c
 
 -- Start labeled components
 instance

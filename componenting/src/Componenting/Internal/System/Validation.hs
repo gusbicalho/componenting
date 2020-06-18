@@ -4,7 +4,7 @@ module Componenting.Internal.System.Validation where
 
 import Data.Kind
 import GHC.TypeLits
-import Componenting.Internal.System.Types
+import Componenting.Internal.System.Graph
 
 type family AllComponentsLabeled t :: Constraint where
   AllComponentsLabeled (a :>> b) = (AllComponentsLabeled a, AllComponentsLabeled b)
@@ -21,7 +21,6 @@ type family If (cond :: Bool) (thenT :: k) (elseT :: k) :: k where
   If 'True thenT _ = thenT
   If 'False _ elseT = elseT
 
--- TODO use some type-level set to avoid n^2
 infixr 5 ++
 type family (++) (xs :: [k]) (ys :: [k]) :: [k] where
     '[]       ++ ys = ys
@@ -32,6 +31,7 @@ type family CollectLabels t :: [Symbol] where
   CollectLabels (a :>> b) = CollectLabels a ++ CollectLabels b
   CollectLabels _ = '[]
 
+-- TODO use some type-level set to avoid n^2
 type family LabelKnown (knownLabels :: [Symbol]) (label :: Symbol) where
   LabelKnown '[] _ = 'False
   LabelKnown (l ': ls) l = 'True
