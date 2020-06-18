@@ -1,4 +1,5 @@
 {-# LANGUAGE UndecidableInstances #-}
+
 module Componenting.Internal.System.Graph where
 
 import Componenting.Component

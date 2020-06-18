@@ -1,6 +1,5 @@
-{-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE PolyKinds #-}
-{-# LANGUAGE UndecidableInstances #-}
+{-# OPTIONS_GHC -Wno-redundant-constraints #-}
+
 module Componenting.System
   ( System, system, unSystem, (:>>), (~>>), (:->) (..), replace
   , RunningSystem, (:<<), WithMeta, RenamingDep, renamingDep

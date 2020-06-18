@@ -1,5 +1,6 @@
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE UndecidableInstances #-}
+
 module Componenting.Internal.System.Validation where
 
 import Data.Kind

@@ -1,7 +1,7 @@
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# OPTIONS_GHC -Wno-partial-type-signatures #-}
-{-# LANGUAGE UndecidableInstances #-}
--- Same use case as ComponentTypeclasses, implemented using SimpleComponent
+
+-- | Same use case as ComponentTypeclasses, implemented using SimpleComponent
 module Componenting.Examples.SimpleComponent where
 
 import Data.Function ((&))

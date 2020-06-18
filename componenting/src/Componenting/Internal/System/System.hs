@@ -1,6 +1,5 @@
-{-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE UndecidableInstances #-}
+
 module Componenting.Internal.System.System where
 
 import Componenting.Component

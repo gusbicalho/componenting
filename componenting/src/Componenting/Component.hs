@@ -1,5 +1,3 @@
-{-# LANGUAGE UndecidableInstances #-}
-{-# language UndecidableSuperClasses #-}
 module Componenting.Component
   ( StartComponent (..)
   , StopComponent (..), stop
