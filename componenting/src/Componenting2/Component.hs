@@ -99,7 +99,7 @@ instance StopComponent StartedBar where
 -- sys1 :: System ("bar" .== Bar
             --  .+ "foo" .== Foo
             --  .+ "show" .== Msg)
--- TODO: problem, if a dep is missing, we get reduction overflow
+-- TODO: problem, if a dep is missing, we get a stupid error message
 sys1 = System $ #show .== Msg "lol"
              .+ #foo .== Foo
              .+ #bar .== Bar
@@ -120,7 +120,7 @@ startedSys1 = start empty sys1
 -- startAndStopSys1 = do
 --   started
 
--- Running System
+-- System
 
 data System
     (systemDef :: Row Type)
@@ -130,6 +130,20 @@ data System
   System :: ( StartSystem Empty '[] systemDef runningComps systemStack
             , StopStack systemStack Empty systemDef )
          => Rec systemDef -> System systemDef runningComps systemStack
+
+data SystemStartStack (stack :: [Row Type]) where
+  EmptySystemStartStack :: SystemStartStack '[]
+  (:>>) :: (Forall row StartComponent)
+        => SystemStartStack rows -> Rec row -> SystemStartStack (row ': rows)
+
+data SystemStopStack (stack :: [Row Type]) where
+  EmptySystemStopStack :: SystemStopStack '[]
+  (:<<) :: Rec row -> SystemStopStack rows -> SystemStopStack (row ': rows)
+
+data RunningSystem (systemDef :: Row Type) (componentsRow :: Row Type) (systemStack :: [Row Type])
+  = RSys { getComponents :: Rec componentsRow
+         , getStopSystemStack :: SystemStopStack systemStack
+         }
 
 instance StartComponent
     (System systemDef runningComps systemStack)
@@ -152,21 +166,23 @@ instance
     stopped <- stopStack empty stack
     pure $ System stopped
 
-data SystemStack (stack :: [Row Type]) where
-  EmptySystemStack :: SystemStack '[]
-  (:<<) :: Rec row -> SystemStack rows -> SystemStack (row ': rows)
-
-data RunningSystem (systemDef :: Row Type) (componentsRow :: Row Type) (systemStack :: [Row Type])
-  = RSys { getComponents :: Rec componentsRow
-         , getSystemStack :: SystemStack systemStack
-         }
-
 noDeps :: RunningSystem systemDef Empty '[]
-noDeps = RSys empty EmptySystemStack
+noDeps = RSys empty EmptySystemStopStack
 
--- Starting system
+-- Starting all values in a Row with a single dependencies record
 
-class StartAll
+class
+  ( StartComponent comp
+  , Dependencies (DependenciesSpec comp) depsRow ) =>
+  StartableWithDependencies depsRow comp
+instance
+  ( StartComponent comp
+  , Dependencies (DependenciesSpec comp) depsRow ) =>
+  StartableWithDependencies depsRow comp
+
+class
+  ( Forall systemDefRow (StartableWithDependencies depsRow) ) =>
+  StartAll
     depsRow
     systemDefRow
     startedSystemRow startedCompsWithMetaRow
@@ -179,8 +195,7 @@ instance StartAll depsRow Empty Empty Empty where
 
 instance
   ( KnownSymbol label
-  , StartComponent comp
-  , Dependencies (DependenciesSpec comp) depsRow
+  , StartableWithDependencies depsRow comp
   , StartAll depsRow ('RI.R restOfSystemDefRow) ('RI.R restOfStartedSystemRow) ('RI.R restOftartedCompsWithMetaRow)
   , startedCompsWithMetaRow ~ ((label .== (ComponentMeta comp, Started comp)) .+ ('RI.R restOftartedCompsWithMetaRow))
   , startedSystemRow ~ ((label .== Started comp) .+ ('RI.R restOfStartedSystemRow))
@@ -199,38 +214,81 @@ instance
     pure $ ( label .== (meta, started) .+ startedRestWithMeta
            , label .== started .+ startedRest)
 
-class StartSystem
-    depsRow depsSystemStack
-    systemDefRow
-    startedSystemRow fullSystemStack
-    | depsRow depsSystemStack systemDefRow -> startedSystemRow fullSystemStack
+-- Take all startable components from a components map
+
+type family TypeEq (t1 :: k) (t2 :: k) :: Bool where
+  TypeEq t t = 'True
+  TypeEq _ _ = 'False
+
+type family StartableComponents
+    (deps :: Row Type)
+    (systemDef :: Row Type)
+    :: Row Type
   where
-  startSystem :: RunningSystem systemDef depsRow depsSystemStack -> Rec systemDefRow -> IO (RunningSystem systemDef startedSystemRow fullSystemStack)
+    StartableComponents _ Empty = Empty
+
+class
+  ( Forall systemDef StartComponent
+  , Forall startableComponents (StartableWithDependencies deps) ) =>
+  SplitStartableComponents
+    (deps :: Row Type)
+    (systemDef :: Row Type)
+    (startableComponents :: Row Type)
+    | deps systemDef -> startableComponents
+  where
+    splitStartableComponents :: Rec deps
+                             -> Rec systemDef
+                             -> (Rec startableComponents, Rec (systemDef .\\ startableComponents))
+
+instance
+  SplitStartableComponents deps Empty Empty
+  where
+    splitStartableComponents _ _ = (empty, empty)
+
+-- instance
+--   ( systemDef ~ 'RI.R (pair ': morePairs)
+--   ) =>
+--   SplitStartableComponents
+--     deps
+--     ('RI.R (pair ': morePairs))
+--     startableComponents
+--   where
+
+
+-- Starting system
+
+class StartSystem
+    depsRow depsStopSystemStack
+    systemDefRow
+    startedSystemRow fullStopSystemStack
+    | depsRow depsStopSystemStack systemDefRow -> startedSystemRow fullStopSystemStack
+  where
+  startSystem :: RunningSystem systemDef depsRow depsStopSystemStack -> Rec systemDefRow -> IO (RunningSystem systemDef startedSystemRow fullStopSystemStack)
 
 instance
   {-# OVERLAPPING #-}
-  StartSystem deps depsSystemStack Empty deps depsSystemStack where
+  StartSystem deps depsStopSystemStack Empty deps depsStopSystemStack where
   startSystem system _ = pure system
 
 instance
   {-# OVERLAPPABLE #-}
   ( providedDeps ~ ComponentLabels depsRow
-  , startableComps ~ ComponentsWithSatisfiedDeps providedDeps systemDefRow
   , startableComps ~ 'RI.R (pair ': morePairs)
+  , startableComps ~ ComponentsWithSatisfiedDeps providedDeps systemDefRow
   , Forall startableComps RI.Unconstrained1
   , RI.Subset startableComps systemDefRow
   , StartAll depsRow startableComps startedComps startedCompsWithMeta
   , intermediateSystem ~ (depsRow .+ startedComps)
   , leftoverComps ~ (systemDefRow .\\ startableComps)
   , StartSystem
-      intermediateSystem (startedCompsWithMeta ': depsSystemStack)
+      intermediateSystem (startedCompsWithMeta ': depsStopSystemStack)
       leftoverComps
-      startedSystemRow fullSystemStack
+      startedSystemRow fullStopSystemStack
   ) =>
   StartSystem
-    depsRow depsSystemStack
+    depsRow depsStopSystemStack
     systemDefRow
-    startedSystemRow fullSystemStack
+    startedSystemRow fullStopSystemStack
   where
   startSystem (RSys deps depsStack) systemDef = do
     let (startable, leftover) = split @startableComps systemDef
@@ -273,12 +331,12 @@ class StopStack
     (systemDef :: Row Type)
     | stack stoppedSoFar -> systemDef
   where
-  stopStack :: Rec stoppedSoFar -> SystemStack stack -> IO (Rec systemDef)
+  stopStack :: Rec stoppedSoFar -> SystemStopStack stack -> IO (Rec systemDef)
 
 instance
   {-# OVERLAPPING #-}
   StopStack '[] stoppedSoFar stoppedSoFar where
-  stopStack stoppedComps EmptySystemStack = pure stoppedComps
+  stopStack stoppedComps EmptySystemStopStack = pure stoppedComps
 
 instance
   {-# OVERLAPPABLE #-}
