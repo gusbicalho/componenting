@@ -100,9 +100,15 @@ instance StopComponent StartedBar where
             --  .+ "foo" .== Foo
             --  .+ "show" .== Msg)
 -- TODO: problem, if a dep is missing, we get a stupid error message
-sys1 = System $ #show .== Msg "lol"
-             .+ #foo .== Foo
-             .+ #bar .== Bar
+sys1Def = #show .== Msg "lol"
+       .+ #foo .== Foo
+       .+ #bar .== Bar
+
+a = toSystemStartStack @'[] $ #show .== Msg "lol"
+                           .+ #foo .== Foo
+                           .+ #bar .== Bar
+
+sys1 = System sys1Def
 
 startedSys1 :: IO (RunningSystem
                       ("bar" .== Bar
@@ -134,7 +140,7 @@ data System
 data SystemStartStack (stack :: [Row Type]) where
   EmptySystemStartStack :: SystemStartStack '[]
   (:>>) :: (Forall row StartComponent)
-        => SystemStartStack rows -> Rec row -> SystemStartStack (row ': rows)
+        => Rec row -> SystemStartStack rows -> SystemStartStack (row ': rows)
 
 data SystemStopStack (stack :: [Row Type]) where
   EmptySystemStopStack :: SystemStopStack '[]
@@ -216,44 +222,87 @@ instance
 
 -- Take all startable components from a components map
 
-type family TypeEq (t1 :: k) (t2 :: k) :: Bool where
-  TypeEq t t = 'True
-  TypeEq _ _ = 'False
-
-type family StartableComponents
-    (deps :: Row Type)
-    (systemDef :: Row Type)
-    :: Row Type
-  where
-    StartableComponents _ Empty = Empty
-
 class
   ( Forall systemDef StartComponent
-  , Forall startableComponents (StartableWithDependencies deps) ) =>
+  , Forall startableComponents StartComponent
+  , Forall (systemDef .\\ startableComponents) StartComponent ) =>
   SplitStartableComponents
-    (deps :: Row Type)
+    (depsLabels :: [Symbol])
     (systemDef :: Row Type)
     (startableComponents :: Row Type)
-    | deps systemDef -> startableComponents
+    | depsLabels systemDef -> startableComponents
   where
-    splitStartableComponents :: Rec deps
-                             -> Rec systemDef
+    splitStartableComponents :: Rec systemDef
                              -> (Rec startableComponents, Rec (systemDef .\\ startableComponents))
 
 instance
-  SplitStartableComponents deps Empty Empty
+  SplitStartableComponents depsLabels Empty Empty
   where
-    splitStartableComponents _ _ = (empty, empty)
+    splitStartableComponents _ = (empty, empty)
 
--- instance
---   ( systemDef ~ 'RI.R (pair ': morePairs)
---   ) =>
---   SplitStartableComponents
---     deps
---     ('RI.R (pair ': morePairs))
---     startableComponents
---   where
+instance
+  ( systemDef ~ 'RI.R (pair ': morePairs)
+  , Forall systemDef StartComponent
+  , startableComponents ~ ComponentsWithSatisfiedDeps depsLabels systemDef
+  , RI.Subset startableComponents systemDef
+  , Forall startableComponents RI.Unconstrained1
+  , Forall startableComponents StartComponent
+  , Forall (systemDef .\\ startableComponents) StartComponent ) =>
+  SplitStartableComponents
+    depsLabels
+    ('RI.R (pair ': morePairs))
+    startableComponents
+  where
+    splitStartableComponents systemDef =
+      split @startableComponents systemDef
 
+-- Turn a component map into a SystemStartStack
+
+class ToSystemStartStack
+    (depsLabels :: [Symbol])
+    (systemDef :: Row Type)
+    (systemStartStack :: [Row Type])
+    | depsLabels systemDef -> systemStartStack
+  where
+    toSystemStartStack :: Rec systemDef -> SystemStartStack systemStartStack
+
+instance ToSystemStartStack depsLabels Empty '[] where
+  toSystemStartStack _ = EmptySystemStartStack
+
+instance
+  ( systemDef ~ 'RI.R (pair ': morePairs)
+  , SplitStartableComponents depsLabels systemDef startableComponents
+  -- , CheckForUnsolvableDependencies depsLabels systemDef startableComponents
+  , CheckForUnsolvableDependencies
+      depsLabels systemDef startableComponents
+      (ComponentLabels startableComponents)
+      ~ startableLabels
+  , nextDepsLabels ~ (depsLabels ++ startableLabels)
+  , ToSystemStartStack nextDepsLabels (systemDef .\\ startableComponents) nextSystemStartStack
+  ) =>
+  ToSystemStartStack
+    depsLabels
+    ('RI.R (pair ': morePairs))
+    (startableComponents ': nextSystemStartStack)
+  where
+    toSystemStartStack systemDef =
+      let (startable, leftover) = splitStartableComponents @depsLabels systemDef
+          nextSystemStartStack = toSystemStartStack @nextDepsLabels leftover
+      in startable :>> nextSystemStartStack
+
+type family CheckForUnsolvableDependencies
+    (depsLabels :: [Symbol])
+    (systemDef :: Row Type)
+    (startableComponents :: Row Type)
+    (result :: k)
+    :: k
+  where
+    CheckForUnsolvableDependencies depsLabels systemDef Empty result =
+      TypeError ('Text "Unsolvable dependencies in system. Cannot start these components: " ':<>:
+                 'ShowType systemDef ':<>:
+                 'Text "even after starting these dependencies: " ':<>: 'ShowType depsLabels)
+    CheckForUnsolvableDependencies depsLabels systemDef startableComponents result
+      = result
 
 -- Starting system
 
