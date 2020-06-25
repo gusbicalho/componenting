@@ -104,9 +104,9 @@ sys1Def = #show .== Msg "lol"
        .+ #foo .== Foo
        .+ #bar .== Bar
 
-a = toSystemStartStack @'[] $ #show .== Msg "lol"
-                           .+ #foo .== Foo
-                           .+ #bar .== Bar
+-- a = toSystemStartStack @'[] $ #show .== Msg "lol"
+--                            .+ #foo .== Foo
+--                            .+ #bar .== Bar
 
 sys1 = System sys1Def
 
@@ -114,14 +114,15 @@ startedSys1 :: IO (RunningSystem
                       ("bar" .== Bar
                     .+ "foo" .== Foo
                     .+ "show" .== Msg)
-                      ("bar" .== StartedBar
-                    .+ "foo" .== StartedFoo
-                    .+ "show" .== StartedMsg)
                      '[ ("bar" .== ((), StartedBar))
                       , ("foo" .== ((), StartedFoo))
                       , ("show" .== ((), StartedMsg)) ]
                   )
 startedSys1 = start empty sys1
+
+a = startTheSystem $ #show .== Msg "lol"
+                  .+ #foo .== Foo
+                  .+ #bar .== Bar
 
 -- startAndStopSys1 = do
 --   started
@@ -130,12 +131,11 @@ startedSys1 = start empty sys1
 
 data System
     (systemDef :: Row Type)
-    (runningComps :: Row Type)
     (systemStack :: [Row Type])
   where
-  System :: ( StartSystem Empty '[] systemDef runningComps systemStack
+  System :: ( StartSystem Empty '[] systemDef systemStack
             , StopStack systemStack Empty systemDef )
-         => Rec systemDef -> System systemDef runningComps systemStack
+         => Rec systemDef -> System systemDef systemStack
 
 data SystemStartStack (stack :: [Row Type]) where
   EmptySystemStartStack :: SystemStartStack '[]
@@ -146,54 +146,99 @@ data SystemStopStack (stack :: [Row Type]) where
   EmptySystemStopStack :: SystemStopStack '[]
   (:<<) :: Rec row -> SystemStopStack rows -> SystemStopStack (row ': rows)
 
-data RunningSystem (systemDef :: Row Type) (componentsRow :: Row Type) (systemStack :: [Row Type])
-  = RSys { getComponents :: Rec componentsRow
+data RunningSystem (systemDef :: Row Type) (systemStack :: [Row Type])
+  = RSys { getComponents :: Rec (AllStarted systemDef)
          , getStopSystemStack :: SystemStopStack systemStack
          }
 
-instance StartComponent
-    (System systemDef runningComps systemStack)
+instance
+  (systemDef ~ (Empty .+ systemDef)) =>
+  StartComponent
+    (System systemDef systemStack)
   where
-  type Started (System systemDef runningComps systemStack)
-    = RunningSystem systemDef runningComps systemStack
-  type ComponentMeta (System systemDef runningComps systemStack) = ()
-  type DependenciesSpec (System systemDef runningComps systemStack) = '[]
+  type Started (System systemDef systemStack)
+    = RunningSystem systemDef systemStack
+  type ComponentMeta (System systemDef systemStack) = ()
+  type DependenciesSpec (System systemDef systemStack) = '[]
   start _ (System systemDef) = startSystem noDeps systemDef
 
 instance
-  ( StartSystem Empty '[] systemDef runningComps systemStack
+  ( systemDef ~ (Empty .+ systemDef)
+  , StartSystem Empty '[] systemDef systemStack
   , StopStack systemStack Empty systemDef) =>
   StopComponent
-    (RunningSystem systemDef runningComps systemStack)
+    (RunningSystem systemDef systemStack)
   where
-  type Stopped (RunningSystem systemDef runningComps systemStack)
-    = System systemDef runningComps systemStack
+  type Stopped (RunningSystem systemDef systemStack)
+    = System systemDef systemStack
   stopWithMeta () (RSys _ stack) = do
     stopped <- stopStack empty stack
     pure $ System stopped
 
-noDeps :: RunningSystem systemDef Empty '[]
+noDeps :: RunningSystem Empty '[]
 noDeps = RSys empty EmptySystemStopStack
 
 -- Turn a Row Type into a list of (componentName, [dependencyNames]) pairs
-type DependencyAssociationList = [(Symbol, [Symbol])]
-
-type family SystemDefToDependencyAssociationList
+type family ToSystemStartLayers
     (systemDef :: Row Type)
-    :: DependencyAssociationList where
-  SystemDefToDependencyAssociationList Empty = '[]
-  SystemDefToDependencyAssociationList ('RI.R ((label 'RI.:-> compDef) ': pairs)) =
-    '(label, DependenciesNames (DependenciesSpec compDef))
-      ': SystemDefToDependencyAssociationList ('RI.R pairs)
-
-type SystemStartLayers = [[Symbol]]
-
-type family DependencyAssociationListToSystemStartLayers
-    (providedDeps :: [Symbol])
-    (depsAL :: DependencyAssociationList)
     :: SystemStartLayers
   where
-  DependencyAssociationListToSystemStartLayers providedDeps '[] = '[]
+    ToSystemStartLayers systemDef =
+      DependencyNamesMapToSystemStartLayers
+        '[]
+        (SystemDefToDependencyNamesMap systemDef)
+
+type DependencyNamesMap = [(Symbol, [Symbol])]
+
+type family SystemDefToDependencyNamesMap
+    (systemDef :: Row Type)
+    :: DependencyNamesMap where
+  SystemDefToDependencyNamesMap Empty = '[]
+  SystemDefToDependencyNamesMap ('RI.R ((label 'RI.:-> compDef) ': pairs)) =
+    '(label, ListLabels (DependenciesSpec compDef))
+      ': SystemDefToDependencyNamesMap ('RI.R pairs)
+
+type StartableComponents = [Symbol]
+type SystemStartLayers = [StartableComponents]
+
+type family DependencyNamesMapToStartableComponents
+    (providedDeps :: [Symbol])
+    (compDepsMap :: DependencyNamesMap)
+    :: StartableComponents
+  where
+  DependencyNamesMapToStartableComponents providedDeps '[] = '[]
+  DependencyNamesMapToStartableComponents providedDeps ('(compLabel, requiredDeps) ': morePairs) =
+    If (AllItemsKnown providedDeps requiredDeps)
+      (compLabel ': DependencyNamesMapToStartableComponents providedDeps morePairs)
+      (DependencyNamesMapToStartableComponents providedDeps morePairs)
+
+type family DependencyNamesMapToSystemStartLayers
+    (providedDeps :: [Symbol])
+    (compDepsMap :: DependencyNamesMap)
+    :: SystemStartLayers
+  where
+    DependencyNamesMapToSystemStartLayers providedDeps '[] = '[]
+    DependencyNamesMapToSystemStartLayers providedDeps compDepsMap =
+      NextSystemStartLayer
+        providedDeps
+        compDepsMap
+        (DependencyNamesMapToStartableComponents providedDeps compDepsMap)
+
+type family NextSystemStartLayer
+    (providedDeps :: [Symbol])
+    (compDepsMap :: DependencyNamesMap)
+    (startableComponents :: StartableComponents)
+    :: SystemStartLayers
+  where
+  NextSystemStartLayer providedDeps compDepsMap '[] =
+    TypeError
+      ('Text "Unsolvable dependencies in system. These components have missing dependencies: " ':$$:
+       'ShowType (ListLabels compDepsMap) ':$$:
+       'Text "even after starting these dependencies: " ':<>: 'ShowType providedDeps)
+  NextSystemStartLayer providedDeps compDepsMap startableComponents =
+    startableComponents ': (DependencyNamesMapToSystemStartLayers
+                              (providedDeps ++ startableComponents)
+                              (RemoveLabels startableComponents compDepsMap))
 
 
 -- Starting all values in a Row with a single dependencies record
@@ -212,25 +257,25 @@ class
   StartAll
     depsRow
     systemDefRow
-    startedSystemRow startedCompsWithMetaRow
-    | depsRow systemDefRow -> startedSystemRow startedCompsWithMetaRow
   where
-  startAll :: Rec depsRow -> Rec systemDefRow -> IO (Rec startedCompsWithMetaRow, Rec startedSystemRow)
+  startAll :: Rec depsRow
+           -> Rec systemDefRow
+           -> IO ( Rec (AllStartedWithMeta systemDefRow)
+                 , Rec (AllStarted systemDefRow))
 
-instance StartAll depsRow Empty Empty Empty where
+instance StartAll depsRow Empty where
   startAll _ _ = pure (empty, empty)
 
 instance
   ( KnownSymbol label
   , StartableWithDependencies depsRow comp
-  , StartAll depsRow ('RI.R restOfSystemDefRow) ('RI.R restOfStartedSystemRow) ('RI.R restOftartedCompsWithMetaRow)
-  , startedCompsWithMetaRow ~ ((label .== (ComponentMeta comp, Started comp)) .+ ('RI.R restOftartedCompsWithMetaRow))
-  , startedSystemRow ~ ((label .== Started comp) .+ ('RI.R restOfStartedSystemRow))
+  , StartAll depsRow ('RI.R restOfSystemDefRow)
+  , AllStartedIsAssociative label comp restOfSystemDefRow
+  , AllStartedWithMetaIsAssociative label comp restOfSystemDefRow
   ) =>
   StartAll
     depsRow
     ('RI.R ((label 'RI.:-> comp) ': restOfSystemDefRow))
-    startedSystemRow startedCompsWithMetaRow
   where
   startAll deps systemDef = do
     let label = Label @label
@@ -243,127 +288,199 @@ instance
 
 -- Take all startable components from a components map
 
-class
-  ( Forall systemDef StartComponent
-  , Forall startableComponents StartComponent
-  , Forall (systemDef .\\ startableComponents) StartComponent ) =>
-  SplitStartableComponents
-    (depsLabels :: [Symbol])
+-- class
+--   ( Forall systemDef StartComponent
+--   , Forall startableComponents StartComponent
+--   , Forall (systemDef .\\ startableComponents) StartComponent ) =>
+--   SplitStartableComponents
+--     (depsLabels :: [Symbol])
+--     (systemDef :: Row Type)
+--     (startableComponents :: Row Type)
+--     | depsLabels systemDef -> startableComponents
+--   where
+--     splitStartableComponents :: Rec systemDef
+--                              -> (Rec startableComponents, Rec (systemDef .\\ startableComponents))
+
+-- instance
+--   SplitStartableComponents depsLabels Empty Empty
+--   where
+--     splitStartableComponents _ = (empty, empty)
+
+-- instance
+--   ( systemDef ~ 'RI.R (pair ': morePairs)
+--   , Forall systemDef StartComponent
+--   , startableComponents ~ ComponentsWithSatisfiedDeps depsLabels systemDef
+--   , RI.Subset startableComponents systemDef
+--   , Forall startableComponents RI.Unconstrained1
+--   , Forall startableComponents StartComponent
+--   , Forall (systemDef .\\ startableComponents) StartComponent ) =>
+--   SplitStartableComponents
+--     depsLabels
+--     ('RI.R (pair ': morePairs))
+--     startableComponents
+--   where
+--     splitStartableComponents systemDef =
+--       split @startableComponents systemDef
+
+-- -- Turn a component map into a SystemStartStack
+
+-- class ToSystemStartStack
+--     (depsLabels :: [Symbol])
+--     (systemDef :: Row Type)
+--     (systemStartStack :: [Row Type])
+--     | depsLabels systemDef -> systemStartStack
+--   where
+--     toSystemStartStack :: Rec systemDef -> SystemStartStack systemStartStack
+
+-- instance ToSystemStartStack depsLabels Empty '[] where
+--   toSystemStartStack _ = EmptySystemStartStack
+
+-- instance
+--   ( systemDef ~ 'RI.R (pair ': morePairs)
+--   , SplitStartableComponents depsLabels systemDef startableComponents
+--   -- , CheckForUnsolvableDependencies depsLabels systemDef startableComponents
+--   , CheckForUnsolvableDependencies
+--       depsLabels systemDef startableComponents
+--       (ComponentLabels startableComponents)
+--       ~ startableLabels
+--   , nextDepsLabels ~ (depsLabels ++ startableLabels)
+--   , ToSystemStartStack nextDepsLabels (systemDef .\\ startableComponents) nextSystemStartStack
+--   ) =>
+--   ToSystemStartStack
+--     depsLabels
+--     ('RI.R (pair ': morePairs))
+--     (startableComponents ': nextSystemStartStack)
+--   where
+--     toSystemStartStack systemDef =
+--       let (startable, leftover) = splitStartableComponents @depsLabels systemDef
+--           nextSystemStartStack = toSystemStartStack @nextDepsLabels leftover
+--       in startable :>> nextSystemStartStack
+
+-- type family CheckForUnsolvableDependencies
+--     (depsLabels :: [Symbol])
+--     (systemDef :: Row Type)
+--     (startableComponents :: Row Type)
+--     (result :: k)
+--     :: k
+--   where
+--     CheckForUnsolvableDependencies depsLabels systemDef Empty result =
+--       TypeError ('Text "Unsolvable dependencies in system. Cannot start these components: " ':$$:
+--                  'ShowType systemDef ':$$:
+--                  'Text "even after starting these dependencies: " ':<>: 'ShowType depsLabels)
+--     CheckForUnsolvableDependencies depsLabels systemDef startableComponents result
+--       = result
+
+class StartAllLabels
+    (labels :: [Symbol])
+    (deps :: Row Type)
     (systemDef :: Row Type)
-    (startableComponents :: Row Type)
-    | depsLabels systemDef -> startableComponents
   where
-    splitStartableComponents :: Rec systemDef
-                             -> (Rec startableComponents, Rec (systemDef .\\ startableComponents))
+    startAllLabels :: Rec deps
+                   -> Rec systemDef
+                   -> IO (Rec (AllStartedWithMeta
+                                (SelectMatchingLabels labels systemDef))
+                         ,Rec (AllStarted
+                                (SelectMatchingLabels labels systemDef)))
 
 instance
-  SplitStartableComponents depsLabels Empty Empty
+  ( SelectAll labels systemDef
+  , StartAll deps (SelectMatchingLabels labels systemDef)) =>
+  StartAllLabels
+    labels
+    deps
+    systemDef
   where
-    splitStartableComponents _ = (empty, empty)
+    startAllLabels deps systemDef = startAll deps (selectAll @labels systemDef)
 
-instance
-  ( systemDef ~ 'RI.R (pair ': morePairs)
-  , Forall systemDef StartComponent
-  , startableComponents ~ ComponentsWithSatisfiedDeps depsLabels systemDef
-  , RI.Subset startableComponents systemDef
-  , Forall startableComponents RI.Unconstrained1
-  , Forall startableComponents StartComponent
-  , Forall (systemDef .\\ startableComponents) StartComponent ) =>
-  SplitStartableComponents
-    depsLabels
-    ('RI.R (pair ': morePairs))
-    startableComponents
-  where
-    splitStartableComponents systemDef =
-      split @startableComponents systemDef
-
--- Turn a component map into a SystemStartStack
-
-class ToSystemStartStack
-    (depsLabels :: [Symbol])
+-- Traversing the SystemStartLayers
+class StartAllLayers
+    (layers :: SystemStartLayers)
+    (deps :: Row Type)
     (systemDef :: Row Type)
-    (systemStartStack :: [Row Type])
-    | depsLabels systemDef -> systemStartStack
   where
-    toSystemStartStack :: Rec systemDef -> SystemStartStack systemStartStack
+    startAllLayers :: Rec deps
+                   -> Rec systemDef
+                   -> IO (Rec (AllStartedWithMeta
+                                (SelectMatchingLabels (Concat layers) systemDef))
+                         ,Rec (AllStarted
+                                (SelectMatchingLabels (Concat layers) systemDef)))
 
-instance ToSystemStartStack depsLabels Empty '[] where
-  toSystemStartStack _ = EmptySystemStartStack
+instance StartAllLayers '[] deps systemDef where
+  startAllLayers _ _ = pure (empty, empty)
 
 instance
-  ( systemDef ~ 'RI.R (pair ': morePairs)
-  , SplitStartableComponents depsLabels systemDef startableComponents
-  -- , CheckForUnsolvableDependencies depsLabels systemDef startableComponents
-  , CheckForUnsolvableDependencies
-      depsLabels systemDef startableComponents
-      (ComponentLabels startableComponents)
-      ~ startableLabels
-  , nextDepsLabels ~ (depsLabels ++ startableLabels)
-  , ToSystemStartStack nextDepsLabels (systemDef .\\ startableComponents) nextSystemStartStack
+  ( StartAllLabels layer deps systemDef
+  , StartAllLayers moreLayers (deps .+ AllStarted (SelectMatchingLabels layer systemDef)) systemDef
+  , AllStartedDistributesOverConcat layer moreLayers systemDef
+  , AllStartedWithMetaDistributesOverConcat layer moreLayers systemDef
   ) =>
-  ToSystemStartStack
-    depsLabels
-    ('RI.R (pair ': morePairs))
-    (startableComponents ': nextSystemStartStack)
+  StartAllLayers
+    (layer ': moreLayers)
+    deps
+    systemDef
   where
-    toSystemStartStack systemDef =
-      let (startable, leftover) = splitStartableComponents @depsLabels systemDef
-          nextSystemStartStack = toSystemStartStack @nextDepsLabels leftover
-      in startable :>> nextSystemStartStack
+    startAllLayers deps systemDef = do
+      (startedWithMeta, started) <- startAllLabels @layer deps systemDef
+      (moreStartedWithMeta, moreStarted) <- startAllLayers @moreLayers (deps .+ started) systemDef
+      pure $ ( startedWithMeta .+ moreStartedWithMeta
+             , started .+ moreStarted )
 
-type family CheckForUnsolvableDependencies
-    (depsLabels :: [Symbol])
-    (systemDef :: Row Type)
-    (startableComponents :: Row Type)
-    (result :: k)
-    :: k
-  where
-    CheckForUnsolvableDependencies depsLabels systemDef Empty result =
-      TypeError ('Text "Unsolvable dependencies in system. Cannot start these components: " ':$$:
-                 'ShowType systemDef ':$$:
-                 'Text "even after starting these dependencies: " ':<>: 'ShowType depsLabels)
-    CheckForUnsolvableDependencies depsLabels systemDef startableComponents result
-      = result
+startTheSystem :: forall
+                    (systemDef :: Row Type) .
+                  (StartAllLayers (ToSystemStartLayers systemDef) Empty systemDef)
+               => Rec systemDef
+               -> IO (Rec (AllStartedWithMeta
+                           (SelectMatchingLabels (Concat (ToSystemStartLayers systemDef)) systemDef))
+                     ,Rec (AllStarted
+                           (SelectMatchingLabels (Concat (ToSystemStartLayers systemDef)) systemDef)))
+startTheSystem systemDef = startAllLayers @(ToSystemStartLayers systemDef) empty systemDef
+
 
 -- Starting system
 
 class StartSystem
-    depsRow depsStopSystemStack
-    systemDefRow
-    startedSystemRow fullStopSystemStack
-    | depsRow depsStopSystemStack systemDefRow -> startedSystemRow fullStopSystemStack
+    depsRow depsStopSystemStack systemDefRow
+    fullStopSystemStack
+    | depsRow depsStopSystemStack systemDefRow -> fullStopSystemStack
   where
-  startSystem :: RunningSystem systemDef depsRow depsStopSystemStack -> Rec systemDefRow -> IO (RunningSystem systemDef startedSystemRow fullStopSystemStack)
+  startSystem :: RunningSystem depsRow depsStopSystemStack
+              -> Rec systemDefRow
+              -> IO (RunningSystem (depsRow .+ systemDefRow) fullStopSystemStack)
 
 instance
   {-# OVERLAPPING #-}
-  StartSystem deps depsStopSystemStack Empty deps depsStopSystemStack where
+  (deps ~ (deps .+ Empty)) =>
+  StartSystem deps depsStopSystemStack Empty depsStopSystemStack where
   startSystem system _ = pure system
 
 instance
   {-# OVERLAPPABLE #-}
   ( providedDeps ~ ComponentLabels depsRow
-  , startableComps ~ 'RI.R (pair ': morePairs)
   , startableComps ~ ComponentsWithSatisfiedDeps providedDeps systemDefRow
   , Forall startableComps RI.Unconstrained1
   , RI.Subset startableComps systemDefRow
-  , StartAll depsRow startableComps startedComps startedCompsWithMeta
-  , intermediateSystem ~ (depsRow .+ startedComps)
+  , StartAll (AllStarted depsRow) startableComps
+  , startedComps ~ AllStarted startableComps
+  , intermediateSystem ~ (depsRow .+ startableComps)
+  , AllStarted (depsRow .+ startableComps) ~ (AllStarted depsRow .+ AllStarted startableComps)
   , leftoverComps ~ (systemDefRow .\\ startableComps)
+  , (intermediateSystem .+ leftoverComps) ~ (depsRow .+ systemDefRow)
   , StartSystem
-      intermediateSystem (startedCompsWithMeta ': depsStopSystemStack)
+      intermediateSystem ((AllStartedWithMeta startableComps) ': depsStopSystemStack)
       leftoverComps
-      startedSystemRow fullStopSystemStack
+      fullStopSystemStack
   ) =>
   StartSystem
     depsRow depsStopSystemStack
     systemDefRow
-    startedSystemRow fullStopSystemStack
+    fullStopSystemStack
   where
   startSystem (RSys deps depsStack) systemDef = do
     let (startable, leftover) = split @startableComps systemDef
     (startedWithMeta, started) <- startAll deps startable
-    startSystem (RSys (deps .+ started) (startedWithMeta :<< depsStack)) leftover
+    startSystem
+      @intermediateSystem
+      (RSys (deps .+ started) (startedWithMeta :<< depsStack)) leftover
 
 class StopAll
     (componentsWithMeta :: Row Type)
@@ -421,7 +538,7 @@ instance
       stopped <- stopAll comps
       stopStack (stoppedComps .+ stopped) moreComps
 
-stopSystem :: StopStack stack Empty systemDef => RunningSystem systemDef componentsRow stack -> IO (Rec systemDef)
+stopSystem :: StopStack stack Empty systemDef => RunningSystem systemDef stack -> IO (Rec systemDef)
 stopSystem (RSys _ stack) = stopStack empty stack
 
 -- Processing rows of components
@@ -462,6 +579,55 @@ type family SelectMatchingLabels
 --         ((label 'RI.:-> v) ': PairsMatchingLabels labels morePairs)
 --         (PairsMatchingLabels labels morePairs)
 
+type family AllStartedWithMeta
+    (components :: Row Type)
+    :: Row Type
+  where
+  AllStartedWithMeta ('RI.R pairs) = 'RI.R (GoAllStartedWithMeta pairs)
+
+type family GoAllStartedWithMeta (pairs :: [RI.LT a]) :: [RI.LT a]
+  where
+  GoAllStartedWithMeta '[] = '[]
+  GoAllStartedWithMeta ((label 'RI.:-> comp) ': morePairs) =
+    (label 'RI.:-> (ComponentMeta comp, Started comp))
+      ': GoAllStartedWithMeta morePairs
+
+type AllStartedWithMetaIsAssociative label comp restOfRow =
+  AllStartedWithMeta ('RI.R ((label 'RI.:-> comp) ': restOfRow))
+  ~ ((label .== (ComponentMeta comp, Started comp)) .+ (AllStartedWithMeta ('RI.R restOfRow)))
+
+type AllStartedWithMetaDistributesOverConcat layer moreLayers systemDef =
+  (AllStartedWithMeta
+    (SelectMatchingLabels layer systemDef)
+  .+ AllStartedWithMeta
+      (SelectMatchingLabels (Concat moreLayers) systemDef))
+  ~ AllStartedWithMeta
+      (SelectMatchingLabels (layer ++ Concat moreLayers) systemDef)
+
+type family AllStarted
+    (components :: Row Type)
+    :: Row Type
+  where
+  AllStarted ('RI.R pairs) = 'RI.R (GoAllStarted pairs)
+
+type family GoAllStarted (pairs :: [RI.LT a]) :: [RI.LT a]
+  where
+  GoAllStarted '[] = '[]
+  GoAllStarted ((label 'RI.:-> comp) ': morePairs) =
+    (label 'RI.:-> Started comp)
+      ': GoAllStarted morePairs
+
+type AllStartedIsAssociative label comp restOfRow =
+  AllStarted ('RI.R ((label 'RI.:-> comp) ': restOfRow))
+  ~ ((label .== Started comp) .+ (AllStarted ('RI.R restOfRow)))
+
+type AllStartedDistributesOverConcat layer moreLayers systemDef =
+  (AllStarted
+    (SelectMatchingLabels layer systemDef)
+  .+ AllStarted
+      (SelectMatchingLabels (Concat moreLayers) systemDef))
+  ~ AllStarted
+      (SelectMatchingLabels (layer ++ Concat moreLayers) systemDef)
 
 type family ComponentLabels (components :: Row Type) :: [Symbol]
   where
@@ -545,9 +711,20 @@ type family Dependencies (deps :: [(Symbol, Type -> Constraint)]) :: Row Type ->
   Dependencies ('(label, constraint) ': deps) = And (Dependency label constraint)
                                                     (Dependencies deps)
 
-type family DependenciesNames (deps :: [(Symbol, Type -> Constraint)]) :: [Symbol] where
-  DependenciesNames '[] = '[]
-  DependenciesNames ('(label, constr) ': moreDeps) = AddNonDuplicate (DependenciesNames moreDeps) label
+type family ListLabels (labeledList :: [(Symbol, k)]) :: [Symbol] where
+  ListLabels '[] = '[]
+  ListLabels ('(label, v) ': morePairs) = AddNonDuplicate (ListLabels morePairs) label
+
+type family RemoveLabels
+    (labelsToRemove :: [Symbol])
+    (labeledList :: [(Symbol, k)])
+    :: [(Symbol, k)]
+  where
+    RemoveLabels _ '[] = '[]
+    RemoveLabels labelsToRemove ('(label, v) ': morePairs) =
+      If (ItemKnown labelsToRemove label)
+        (RemoveLabels labelsToRemove morePairs)
+        ('(label, v) ': RemoveLabels labelsToRemove morePairs)
 
 -- Helper type families
 
@@ -560,11 +737,20 @@ type family (++) (xs :: [k]) (ys :: [k]) :: [k] where
     '[]       ++ ys = ys
     (x ': xs) ++ ys = x ': xs ++ ys
 
+-- This has horrible perf but oh well
+type family Concat (xss :: [[k]]) :: [k] where
+  Concat '[] = '[]
+  Concat (xs ': xss) = xs ++ Concat xss
+
 type family Fst (pair :: (k, l)) :: k where
   Fst '(a, b) = a
 
 type family Snd (pair :: (k, l)) :: l where
   Snd '(a, b) = b
+
+type family IsEmpty (list :: [k]) :: Bool where
+  IsEmpty '[] = 'True
+  IsEmpty _ = 'False
 
 -- TODO use some type-level set to avoid n^2
 type family ItemKnown (knownItems :: [k]) (item :: k) :: Bool where
@@ -577,3 +763,11 @@ type family AddNonDuplicate (knownItems :: [k]) (item :: k) :: [k] where
     If (ItemKnown knownItems item)
       knownItems
       (item : knownItems)
+
+type family AllItemsKnown (knownItems :: [k]) (items :: [k]) :: Bool where
+  AllItemsKnown _ '[] = 'True
+  AllItemsKnown '[] _ = 'False
+  AllItemsKnown knownItems (item ': moreItems) =
+    If (ItemKnown knownItems item)
+      (AllItemsKnown knownItems moreItems)
+      'False
