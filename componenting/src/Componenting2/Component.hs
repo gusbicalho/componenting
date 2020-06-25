@@ -175,6 +175,27 @@ instance
 noDeps :: RunningSystem systemDef Empty '[]
 noDeps = RSys empty EmptySystemStopStack
 
+-- Turn a Row Type into a list of (componentName, [dependencyNames]) pairs
+type DependencyAssociationList = [(Symbol, [Symbol])]
+
+type family SystemDefToDependencyAssociationList
+    (systemDef :: Row Type)
+    :: DependencyAssociationList where
+  SystemDefToDependencyAssociationList Empty = '[]
+  SystemDefToDependencyAssociationList ('RI.R ((label 'RI.:-> compDef) ': pairs)) =
+    '(label, DependenciesNames (DependenciesSpec compDef))
+      ': SystemDefToDependencyAssociationList ('RI.R pairs)
+
+type SystemStartLayers = [[Symbol]]
+
+type family DependencyAssociationListToSystemStartLayers
+    (providedDeps :: [Symbol])
+    (depsAL :: DependencyAssociationList)
+    :: SystemStartLayers
+  where
+  DependencyAssociationListToSystemStartLayers providedDeps '[] = '[]
+
+
 -- Starting all values in a Row with a single dependencies record
 
 class
@@ -298,8 +319,8 @@ type family CheckForUnsolvableDependencies
     :: k
   where
     CheckForUnsolvableDependencies depsLabels systemDef Empty result =
-      TypeError ('Text "Unsolvable dependencies in system. Cannot start these components: " ':<>:
-                 'ShowType systemDef ':<>:
+      TypeError ('Text "Unsolvable dependencies in system. Cannot start these components: " ':$$:
+                 'ShowType systemDef ':$$:
                  'Text "even after starting these dependencies: " ':<>: 'ShowType depsLabels)
     CheckForUnsolvableDependencies depsLabels systemDef startableComponents result
       = result
