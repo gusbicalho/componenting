@@ -1,5 +1,7 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE PartialTypeSignatures #-}
+{-# OPTIONS_GHC -Wno-partial-type-signatures #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE UndecidableSuperClasses #-}
@@ -31,16 +33,17 @@ class StartComponent
   start deps stoppedC = snd <$> startWithMeta deps stoppedC
 
 class
-  (StartComponent (Stopped startedC)) =>
+  (StartComponent (Stopped startedC meta)
+  , meta ~ ComponentMeta (Stopped startedC meta) ) =>
   StopComponent
     (startedC :: Type)
+    (meta :: Type)
   where
-  type Stopped startedC :: Type
-  stopWithMeta :: ComponentMeta (Stopped startedC) -> startedC -> IO (Stopped startedC)
+  type Stopped startedC meta :: Type
+  stopWithMeta :: meta -> startedC -> IO (Stopped startedC meta)
 
-stop :: ( StopComponent startedC
-        , ComponentMeta (Stopped startedC) ~ () )
-      => startedC -> IO (Stopped startedC)
+stop :: StopComponent startedC ()
+     => startedC -> IO (Stopped startedC ())
 stop comp = stopWithMeta () comp
 
 -- test comps
@@ -55,8 +58,8 @@ instance StartComponent Msg
   start _ (Msg s) = do
     putStrLn $ "Msg> start " <> s
     pure $ StartedMsg s
-instance StopComponent StartedMsg where
-  type Stopped StartedMsg = Msg
+instance StopComponent StartedMsg () where
+  type Stopped StartedMsg () = Msg
   stopWithMeta _ (StartedMsg s) = do
     putStrLn "Msg> stop"
     pure (Msg s)
@@ -72,8 +75,8 @@ instance StartComponent Foo
     putStrLn "Foo> start"
     putStrLn $ "Foo> show: " <> show (deps .! #show)
     pure StartedFoo
-instance StopComponent StartedFoo where
-  type Stopped StartedFoo = Foo
+instance StopComponent StartedFoo () where
+  type Stopped StartedFoo () = Foo
   stopWithMeta () _ = do
     putStrLn "Foo> stop"
     pure Foo
@@ -90,39 +93,19 @@ instance StartComponent Bar
     putStrLn $ "Bar> show: " <> show (deps .! #show)
     putStrLn $ "Bar> foo: " <> show (deps .! #show)
     pure StartedBar
-instance StopComponent StartedBar where
-  type Stopped StartedBar = Bar
+instance StopComponent StartedBar () where
+  type Stopped StartedBar () = Bar
   stopWithMeta _ StartedBar = do
     putStrLn "Bar> stop"
     pure Bar
 
--- sys1 :: System ("bar" .== Bar
-            --  .+ "foo" .== Foo
-            --  .+ "show" .== Msg)
--- TODO: problem, if a dep is missing, we get a stupid error message
-sys1Def = #show .== Msg "lol"
-       .+ #foo .== Foo
-       .+ #bar .== Bar
+sys1 :: _
+sys1 = System $ #show .== Msg "lol"
+             .+ #foo .== Foo
+             .+ #bar .== Bar
 
--- a = toSystemStartStack @'[] $ #show .== Msg "lol"
---                            .+ #foo .== Foo
---                            .+ #bar .== Bar
-
-sys1 = System sys1Def
-
-startedSys1 :: IO (RunningSystem
-                      ("bar" .== Bar
-                    .+ "foo" .== Foo
-                    .+ "show" .== Msg)
-                     '[ ("bar" .== ((), StartedBar))
-                      , ("foo" .== ((), StartedFoo))
-                      , ("show" .== ((), StartedMsg)) ]
-                  )
+startedSys1 :: _
 startedSys1 = start empty sys1
-
-a = startTheSystem $ #show .== Msg "lol"
-                  .+ #foo .== Foo
-                  .+ #bar .== Bar
 
 -- startAndStopSys1 = do
 --   started
@@ -131,54 +114,51 @@ a = startTheSystem $ #show .== Msg "lol"
 
 data System
     (systemDef :: Row Type)
-    (systemStack :: [Row Type])
   where
-  System :: ( StartSystem Empty '[] systemDef systemStack
-            , StopStack systemStack Empty systemDef )
-         => Rec systemDef -> System systemDef systemStack
+  System :: ( StartComponent (System systemDef)
+            , StopComponent (RunningSystem systemDef) ())
+         => Rec systemDef -> System systemDef
 
-data SystemStartStack (stack :: [Row Type]) where
-  EmptySystemStartStack :: SystemStartStack '[]
-  (:>>) :: (Forall row StartComponent)
-        => Rec row -> SystemStartStack rows -> SystemStartStack (row ': rows)
-
-data SystemStopStack (stack :: [Row Type]) where
-  EmptySystemStopStack :: SystemStopStack '[]
-  (:<<) :: Rec row -> SystemStopStack rows -> SystemStopStack (row ': rows)
-
-data RunningSystem (systemDef :: Row Type) (systemStack :: [Row Type])
+data RunningSystem (systemDef :: Row Type)
   = RSys { getComponents :: Rec (AllStarted systemDef)
-         , getStopSystemStack :: SystemStopStack systemStack
+         , getComponentsWithMeta :: Rec (AllStartedWithMeta systemDef)
          }
 
 instance
-  (systemDef ~ (Empty .+ systemDef)) =>
+  ( systemDef ~ (Empty .+ systemDef)
+  , StartAllLayers (ToSystemStartLayers systemDef) Empty systemDef
+  , systemDef
+    ~ SelectMatchingLabels (Concat (ToSystemStartLayers systemDef)) systemDef
+  ) =>
   StartComponent
-    (System systemDef systemStack)
+    (System systemDef)
   where
-  type Started (System systemDef systemStack)
-    = RunningSystem systemDef systemStack
-  type ComponentMeta (System systemDef systemStack) = ()
-  type DependenciesSpec (System systemDef systemStack) = '[]
-  start _ (System systemDef) = startSystem noDeps systemDef
+  type Started (System systemDef) = RunningSystem systemDef
+  type ComponentMeta (System systemDef) = ()
+  type DependenciesSpec (System systemDef) = '[]
+  start _ (System systemDef) = do
+    (startedWithMeta, started) <- startAllLayers @(ToSystemStartLayers systemDef) empty systemDef
+    pure $ RSys @systemDef started startedWithMeta
 
 instance
-  ( systemDef ~ (Empty .+ systemDef)
-  , StartSystem Empty '[] systemDef systemStack
-  , StopStack systemStack Empty systemDef) =>
+  ( StartComponent (System systemDef)
+  , runningCompsWithMeta ~ AllStartedWithMeta systemDef
+  , AllComponentsWithMetaStopped runningCompsWithMeta ~ systemDef
+  , runningCompsWithMeta
+    ~ SelectMatchingLabels (Concat (ToSystemStopLayers runningCompsWithMeta)) runningCompsWithMeta
+  , StopAllLayers (ToSystemStopLayers runningCompsWithMeta) runningCompsWithMeta ) =>
   StopComponent
-    (RunningSystem systemDef systemStack)
+    (RunningSystem systemDef) ()
   where
-  type Stopped (RunningSystem systemDef systemStack)
-    = System systemDef systemStack
-  stopWithMeta () (RSys _ stack) = do
-    stopped <- stopStack empty stack
+  type Stopped (RunningSystem systemDef) ()
+    = System systemDef
+  stopWithMeta () (RSys _ runningWithMeta) = do
+    stopped <- stopAllLayers @(ToSystemStopLayers runningCompsWithMeta) runningWithMeta
     pure $ System stopped
 
-noDeps :: RunningSystem Empty '[]
-noDeps = RSys empty EmptySystemStopStack
+noDeps :: RunningSystem Empty
+noDeps = RSys empty empty
 
--- Turn a Row Type into a list of (componentName, [dependencyNames]) pairs
 type family ToSystemStartLayers
     (systemDef :: Row Type)
     :: SystemStartLayers
@@ -188,8 +168,16 @@ type family ToSystemStartLayers
         '[]
         (SystemDefToDependencyNamesMap systemDef)
 
+type family ToSystemStopLayers
+    (runningCompsWithMeta :: Row Type)
+    :: SystemStopLayers
+  where
+  ToSystemStopLayers runningCompsWithMeta =
+    Reverse (ToSystemStartLayers (AllComponentsWithMetaStopped runningCompsWithMeta))
+
 type DependencyNamesMap = [(Symbol, [Symbol])]
 
+-- Turn a Row Type into a list of (componentName, [dependencyNames]) pairs
 type family SystemDefToDependencyNamesMap
     (systemDef :: Row Type)
     :: DependencyNamesMap where
@@ -200,6 +188,8 @@ type family SystemDefToDependencyNamesMap
 
 type StartableComponents = [Symbol]
 type SystemStartLayers = [StartableComponents]
+type StoppableComponents = [Symbol]
+type SystemStopLayers = [StoppableComponents]
 
 type family DependencyNamesMapToStartableComponents
     (providedDeps :: [Symbol])
@@ -286,90 +276,6 @@ instance
     pure $ ( label .== (meta, started) .+ startedRestWithMeta
            , label .== started .+ startedRest)
 
--- Take all startable components from a components map
-
--- class
---   ( Forall systemDef StartComponent
---   , Forall startableComponents StartComponent
---   , Forall (systemDef .\\ startableComponents) StartComponent ) =>
---   SplitStartableComponents
---     (depsLabels :: [Symbol])
---     (systemDef :: Row Type)
---     (startableComponents :: Row Type)
---     | depsLabels systemDef -> startableComponents
---   where
---     splitStartableComponents :: Rec systemDef
---                              -> (Rec startableComponents, Rec (systemDef .\\ startableComponents))
-
--- instance
---   SplitStartableComponents depsLabels Empty Empty
---   where
---     splitStartableComponents _ = (empty, empty)
-
--- instance
---   ( systemDef ~ 'RI.R (pair ': morePairs)
---   , Forall systemDef StartComponent
---   , startableComponents ~ ComponentsWithSatisfiedDeps depsLabels systemDef
---   , RI.Subset startableComponents systemDef
---   , Forall startableComponents RI.Unconstrained1
---   , Forall startableComponents StartComponent
---   , Forall (systemDef .\\ startableComponents) StartComponent ) =>
---   SplitStartableComponents
---     depsLabels
---     ('RI.R (pair ': morePairs))
---     startableComponents
---   where
---     splitStartableComponents systemDef =
---       split @startableComponents systemDef
-
--- -- Turn a component map into a SystemStartStack
-
--- class ToSystemStartStack
---     (depsLabels :: [Symbol])
---     (systemDef :: Row Type)
---     (systemStartStack :: [Row Type])
---     | depsLabels systemDef -> systemStartStack
---   where
---     toSystemStartStack :: Rec systemDef -> SystemStartStack systemStartStack
-
--- instance ToSystemStartStack depsLabels Empty '[] where
---   toSystemStartStack _ = EmptySystemStartStack
-
--- instance
---   ( systemDef ~ 'RI.R (pair ': morePairs)
---   , SplitStartableComponents depsLabels systemDef startableComponents
---   -- , CheckForUnsolvableDependencies depsLabels systemDef startableComponents
---   , CheckForUnsolvableDependencies
---       depsLabels systemDef startableComponents
---       (ComponentLabels startableComponents)
---       ~ startableLabels
---   , nextDepsLabels ~ (depsLabels ++ startableLabels)
---   , ToSystemStartStack nextDepsLabels (systemDef .\\ startableComponents) nextSystemStartStack
---   ) =>
---   ToSystemStartStack
---     depsLabels
---     ('RI.R (pair ': morePairs))
---     (startableComponents ': nextSystemStartStack)
---   where
---     toSystemStartStack systemDef =
---       let (startable, leftover) = splitStartableComponents @depsLabels systemDef
---           nextSystemStartStack = toSystemStartStack @nextDepsLabels leftover
---       in startable :>> nextSystemStartStack
-
--- type family CheckForUnsolvableDependencies
---     (depsLabels :: [Symbol])
---     (systemDef :: Row Type)
---     (startableComponents :: Row Type)
---     (result :: k)
---     :: k
---   where
---     CheckForUnsolvableDependencies depsLabels systemDef Empty result =
---       TypeError ('Text "Unsolvable dependencies in system. Cannot start these components: " ':$$:
---                  'ShowType systemDef ':$$:
---                  'Text "even after starting these dependencies: " ':<>: 'ShowType depsLabels)
---     CheckForUnsolvableDependencies depsLabels systemDef startableComponents result
---       = result
-
 class StartAllLabels
     (labels :: [Symbol])
     (deps :: Row Type)
@@ -425,121 +331,91 @@ instance
       pure $ ( startedWithMeta .+ moreStartedWithMeta
              , started .+ moreStarted )
 
-startTheSystem :: forall
-                    (systemDef :: Row Type) .
-                  (StartAllLayers (ToSystemStartLayers systemDef) Empty systemDef)
-               => Rec systemDef
-               -> IO (Rec (AllStartedWithMeta
-                           (SelectMatchingLabels (Concat (ToSystemStartLayers systemDef)) systemDef))
-                     ,Rec (AllStarted
-                           (SelectMatchingLabels (Concat (ToSystemStartLayers systemDef)) systemDef)))
-startTheSystem systemDef = startAllLayers @(ToSystemStartLayers systemDef) empty systemDef
+-- Stop a full row of components
 
-
--- Starting system
-
-class StartSystem
-    depsRow depsStopSystemStack systemDefRow
-    fullStopSystemStack
-    | depsRow depsStopSystemStack systemDefRow -> fullStopSystemStack
+class
+  StopAll
+    (runningCompsWithMeta :: Row Type)
   where
-  startSystem :: RunningSystem depsRow depsStopSystemStack
-              -> Rec systemDefRow
-              -> IO (RunningSystem (depsRow .+ systemDefRow) fullStopSystemStack)
+  stopAll :: Rec runningCompsWithMeta -> IO (Rec (AllComponentsWithMetaStopped runningCompsWithMeta))
 
-instance
-  {-# OVERLAPPING #-}
-  (deps ~ (deps .+ Empty)) =>
-  StartSystem deps depsStopSystemStack Empty depsStopSystemStack where
-  startSystem system _ = pure system
-
-instance
-  {-# OVERLAPPABLE #-}
-  ( providedDeps ~ ComponentLabels depsRow
-  , startableComps ~ ComponentsWithSatisfiedDeps providedDeps systemDefRow
-  , Forall startableComps RI.Unconstrained1
-  , RI.Subset startableComps systemDefRow
-  , StartAll (AllStarted depsRow) startableComps
-  , startedComps ~ AllStarted startableComps
-  , intermediateSystem ~ (depsRow .+ startableComps)
-  , AllStarted (depsRow .+ startableComps) ~ (AllStarted depsRow .+ AllStarted startableComps)
-  , leftoverComps ~ (systemDefRow .\\ startableComps)
-  , (intermediateSystem .+ leftoverComps) ~ (depsRow .+ systemDefRow)
-  , StartSystem
-      intermediateSystem ((AllStartedWithMeta startableComps) ': depsStopSystemStack)
-      leftoverComps
-      fullStopSystemStack
-  ) =>
-  StartSystem
-    depsRow depsStopSystemStack
-    systemDefRow
-    fullStopSystemStack
-  where
-  startSystem (RSys deps depsStack) systemDef = do
-    let (startable, leftover) = split @startableComps systemDef
-    (startedWithMeta, started) <- startAll deps startable
-    startSystem
-      @intermediateSystem
-      (RSys (deps .+ started) (startedWithMeta :<< depsStack)) leftover
-
-class StopAll
-    (componentsWithMeta :: Row Type)
-    (componentsDef :: Row Type)
-    | componentsWithMeta -> componentsDef
-  where
-  stopAll :: Rec componentsWithMeta -> IO (Rec componentsDef)
-
-instance {-# OVERLAPPING #-} StopAll Empty Empty where
+instance {-# OVERLAPPING #-} StopAll Empty where
   stopAll _ = pure empty
 
 instance
   {-# OVERLAPPABLE #-}
   ( KnownSymbol label
-  , StopComponent comp
-  , runningComps ~ 'RI.R ((label 'RI.:-> (ComponentMeta (Stopped comp), comp)) ': restOfStartedComponents)
-  , componentsDef ~ 'RI.R ((label 'RI.:-> Stopped comp) ': restOfComponentDef)
-  , componentsDef ~ (label .== Stopped comp .+ ('RI.R restOfComponentDef))
-  , StopAll ('RI.R restOfStartedComponents) ('RI.R restOfComponentDef)
+  , StopComponent comp meta
+  , AllComponentsWithMetaStoppedIsAssociative label meta comp moreRunningCompsWithMeta
+  , StopAll ('RI.R moreRunningCompsWithMeta)
   ) =>
   StopAll
-    runningComps
-    componentsDef
+    ('RI.R ((label 'RI.:-> (meta, comp)) ': moreRunningCompsWithMeta))
   where
   stopAll comps = do
     let label = Label @label
     let (meta, startedC) = comps .! label
     stopped <- stopWithMeta meta startedC
-    stoppedRest <- stopAll (comps .- label) :: IO (Rec ('RI.R restOfComponentDef))
+    stoppedRest <- stopAll (comps .- label)
     pure $ label .== stopped .+ stoppedRest
 
-class StopStack
-    (stack :: [Row Type])
-    (stoppedSoFar :: Row Type)
-    (systemDef :: Row Type)
-    | stack stoppedSoFar -> systemDef
+class StopAllLabels
+    (labels :: [Symbol])
+    (runningCompsWithMeta :: Row Type)
   where
-  stopStack :: Rec stoppedSoFar -> SystemStopStack stack -> IO (Rec systemDef)
+    stopAllLabels :: Rec runningCompsWithMeta
+                  -> IO ( Rec (AllComponentsWithMetaStopped
+                                (SelectMatchingLabels labels runningCompsWithMeta))
+                        , Rec (runningCompsWithMeta .\\ SelectMatchingLabels labels runningCompsWithMeta) )
 
 instance
-  {-# OVERLAPPING #-}
-  StopStack '[] stoppedSoFar stoppedSoFar where
-  stopStack stoppedComps EmptySystemStopStack = pure stoppedComps
+  ( StopAll (SelectMatchingLabels labels runningComps)
+  , Forall (SelectMatchingLabels labels runningComps) RI.Unconstrained1
+  , RI.Subset (SelectMatchingLabels labels runningComps) runningComps ) =>
+  StopAllLabels
+    labels
+    runningComps
+  where
+    stopAllLabels runningComps = do
+      let (stoppable, notStoppable) = split @(SelectMatchingLabels labels runningComps) runningComps
+      stopped <- stopAll stoppable
+      pure (stopped, notStoppable)
+
+-- Traversing the SystemStopLayers
+class StopAllLayers
+    (layers :: SystemStopLayers)
+    (runningCompsWithMeta :: Row Type)
+  where
+    stopAllLayers :: Rec runningCompsWithMeta
+                   -> IO (Rec (AllComponentsWithMetaStopped
+                                (SelectMatchingLabels (Concat layers) runningCompsWithMeta)))
+
+instance StopAllLayers '[] runningCompsWithMeta where
+  stopAllLayers _ = pure empty
 
 instance
-  {-# OVERLAPPABLE #-}
-  ( StopAll comps stoppedComps
-  , StopStack moreComps (stoppedSoFar .+ stoppedComps) systemDef ) =>
-  StopStack
-    (comps ': moreComps)
-    stoppedSoFar
-    systemDef
+  ( StopAllLabels layer runningCompsWithMeta
+  , StopAllLayers moreLayers (runningCompsWithMeta .\\ SelectMatchingLabels layer runningCompsWithMeta)
+  , ( AllComponentsWithMetaStopped
+        (SelectMatchingLabels layer runningCompsWithMeta)
+    .+
+      AllComponentsWithMetaStopped
+        (SelectMatchingLabels
+          (Concat moreLayers)
+          (runningCompsWithMeta .\\ SelectMatchingLabels layer runningCompsWithMeta))
+    ) ~ AllComponentsWithMetaStopped
+          (SelectMatchingLabels
+            (layer ++ Concat moreLayers)
+            runningCompsWithMeta)
+  ) =>
+  StopAllLayers
+    (layer ': moreLayers)
+    runningCompsWithMeta
   where
-    stopStack stoppedComps (comps :<< moreComps) = do
-      stopped <- stopAll comps
-      stopStack (stoppedComps .+ stopped) moreComps
-
-stopSystem :: StopStack stack Empty systemDef => RunningSystem systemDef stack -> IO (Rec systemDef)
-stopSystem (RSys _ stack) = stopStack empty stack
+    stopAllLayers runningCompsWithMeta = do
+      (stopped, stillRunning) <- stopAllLabels @layer runningCompsWithMeta
+      moreStopped <- stopAllLayers @moreLayers stillRunning
+      pure $ stopped .+ moreStopped
 
 -- Processing rows of components
 
@@ -628,6 +504,34 @@ type AllStartedDistributesOverConcat layer moreLayers systemDef =
       (SelectMatchingLabels (Concat moreLayers) systemDef))
   ~ AllStarted
       (SelectMatchingLabels (layer ++ Concat moreLayers) systemDef)
+
+type family AllComponentsWithMetaStopped
+    (runningCompsWithMeta :: Row Type)
+    :: Row Type
+  where
+  AllComponentsWithMetaStopped ('RI.R pairs) = 'RI.R (GoAllComponentsWithMetaStopped pairs)
+
+type family GoAllComponentsWithMetaStopped (pairs :: [RI.LT a]) :: [RI.LT a]
+  where
+  GoAllComponentsWithMetaStopped '[] = '[]
+  GoAllComponentsWithMetaStopped ((label 'RI.:-> (meta, comp)) ': morePairs) =
+    (label 'RI.:-> (Stopped comp meta))
+      ': GoAllComponentsWithMetaStopped morePairs
+  GoAllComponentsWithMetaStopped ((label 'RI.:-> something) ': _) =
+    TypeError ('Text "Value found under label " ':<>: 'ShowType label ':<>: 'Text " is not stoppable:"
+               ':$$: 'ShowType something)
+
+type AllComponentsWithMetaStoppedIsAssociative label meta comp restOfRow =
+  AllComponentsWithMetaStopped ('RI.R ((label 'RI.:-> (meta, comp)) ': restOfRow))
+  ~ ((label .== Stopped comp meta) .+ (AllComponentsWithMetaStopped ('RI.R restOfRow)))
+
+type AllComponentsWithMetaStoppedDistributesOverConcat layer moreLayers runningComps =
+  (AllComponentsWithMetaStopped
+    (SelectMatchingLabels layer runningComps)
+  .+ AllComponentsWithMetaStopped
+      (SelectMatchingLabels (Concat moreLayers) runningComps))
+  ~ AllComponentsWithMetaStopped
+      (SelectMatchingLabels (layer ++ Concat moreLayers) runningComps)
 
 type family ComponentLabels (components :: Row Type) :: [Symbol]
   where
@@ -742,11 +646,26 @@ type family Concat (xss :: [[k]]) :: [k] where
   Concat '[] = '[]
   Concat (xs ': xss) = xs ++ Concat xss
 
+type family Reverse (xs :: [k]) :: [k] where
+  Reverse xs = GoReverse xs '[]
+
+type family GoReverse (xs :: [k]) (rs :: [k]) :: [k] where
+  GoReverse '[] rs = rs
+  GoReverse (x ': xs) rs = GoReverse xs (x ': rs)
+
 type family Fst (pair :: (k, l)) :: k where
   Fst '(a, b) = a
 
 type family Snd (pair :: (k, l)) :: l where
   Snd '(a, b) = b
+
+type family FstT (pair :: Type) :: Type where
+  FstT (a, b) = a
+  FstT t = TypeError ('Text "Not a tuple type: " ':<>: 'ShowType t)
+
+type family SndT (pair :: Type) :: Type where
+  SndT (a, b) = b
+  SndT t = TypeError ('Text "Not a tuple type: " ':<>: 'ShowType t)
 
 type family IsEmpty (list :: [k]) :: Bool where
   IsEmpty '[] = 'True
