@@ -4,11 +4,20 @@
 
 module Componenting2.Internal.Util where
 
-import Data.Kind (Type)
+import Data.Kind (Constraint, Type)
 import GHC.TypeLits (Symbol, TypeError, ErrorMessage(..))
+
+class Anything (t :: k) where
+instance Anything t where
 
 class (constraint1 row, constraint2 row) => And constraint1 constraint2 (row :: k) where
 instance (constraint1 row, constraint2 row) => And constraint1 constraint2 row where
+
+type family All (constraints :: [k -> Constraint]) :: k -> Constraint where
+  All '[] = Anything
+  All '[constraint] = constraint
+  All (constraint ': moreConstraints) = And constraint
+                                            (All moreConstraints)
 
 type family If (cond :: Bool) (thenT :: k) (elseT :: k) :: k where
   If 'True thenT _ = thenT
@@ -82,3 +91,15 @@ type family RemoveLabels
       If (ItemKnown labelsToRemove label)
         (RemoveLabels labelsToRemove morePairs)
         ('(label, v) ': RemoveLabels labelsToRemove morePairs)
+
+type family RenameLabel
+    (fromLabel :: Symbol)
+    (toLabel :: Symbol)
+    (labeledList :: [(Symbol, k)])
+    :: [(Symbol, k)]
+  where
+  RenameLabel fromLabel toLabel '[] = '[]
+  RenameLabel fromLabel toLabel ('(fromLabel, v) ': morePairs) =
+    '(toLabel, v) ': RenameLabel fromLabel toLabel morePairs
+  RenameLabel fromLabel toLabel (pair ': morePairs) =
+    pair ': RenameLabel fromLabel toLabel morePairs

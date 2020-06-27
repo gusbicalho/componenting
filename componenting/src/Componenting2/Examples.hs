@@ -5,7 +5,7 @@ module Componenting2.Examples where
 
 import Componenting2.Internal.Component
 import Componenting2.Internal.System
-import Data.Row (empty, (.!), (.==), type (.==), (.+), type (.+))
+import Data.Row (Rec, empty, (.!), (.==), type (.==), (.+), type (.+))
 
 data Msg = Msg String
 data StartedMsg = StartedMsg String deriving (Show)
@@ -46,11 +46,11 @@ instance StartComponent Bar
   where
   type Started Bar = StartedBar
   type ComponentMeta Bar = ()
-  type DependenciesSpec Bar = '[ '("show", Show), '("foo", Show) ]
+  type DependenciesSpec Bar = '[ '("show1", Show), '("show2", Show) ]
   start deps Bar = do
     putStrLn "Bar> start"
-    putStrLn $ "Bar> show: " <> show (deps .! #show)
-    putStrLn $ "Bar> foo: " <> show (deps .! #show)
+    putStrLn $ "Bar> show1: " <> show (deps .! #show1)
+    putStrLn $ "Bar> show2: " <> show (deps .! #show2)
     pure StartedBar
 instance StopComponent StartedBar () where
   type Stopped StartedBar () = Bar
@@ -58,18 +58,22 @@ instance StopComponent StartedBar () where
     putStrLn "Bar> stop"
     pure Bar
 
-sys1 :: System ( "show" .== Msg
-              .+ "foo" .== Foo
-              .+ "bar" .== Bar)
-sys1 = System $ #show .== Msg "lol"
-             .+ #foo .== Foo
-             .+ #bar .== Bar
+sys1 :: System ( "msg" .== Msg
+              .+ "foo" .== (RenameDependency "msg" "show" Foo)
+              .+ "bar" .== (RenameDependency "msg" "show1"
+                            (RenameDependency "foo" "show2"
+                             Bar)))
+sys1 = System $ #msg .== Msg "lol"
+             .+ #foo .== ( RenameDependency @"msg" @"show"
+                         $ Foo)
+             .+ #bar .== ( RenameDependency @"msg" @"show1"
+                         $ RenameDependency @"foo" @"show2"
+                         $ Bar)
 
-startedSys1 :: IO (RunningSystem ( "show" .== Msg
-                                .+ "foo" .== Foo
-                                .+ "bar" .== Bar))
-startedSys1 = start empty sys1
+startedComponents :: IO (Rec ( "msg" .== StartedMsg
+                            .+ "foo" .== StartedFoo
+                            .+ "bar" .== StartedBar))
+startedComponents = getComponents <$> start empty sys1
 
 -- TODO:
--- Rename dependencies
 -- Optional dependencies
