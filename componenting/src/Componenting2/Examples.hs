@@ -69,3 +69,7 @@ startedSys1 :: IO (RunningSystem ( "show" .== Msg
                                 .+ "foo" .== Foo
                                 .+ "bar" .== Bar))
 startedSys1 = start empty sys1
+
+-- TODO:
+-- Rename dependencies
+-- Optional dependencies
