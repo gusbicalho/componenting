@@ -116,9 +116,9 @@ instance
 
 class
   ( StartComponent comp
-  , Dependencies (DependenciesSpec comp) depsRow ) =>
+  , DependenciesConstraint comp depsRow ) =>
   StartableWithDependencies depsRow comp
 instance
   ( StartComponent comp
-  , Dependencies (DependenciesSpec comp) depsRow ) =>
+  , DependenciesConstraint comp depsRow ) =>
   StartableWithDependencies depsRow comp
