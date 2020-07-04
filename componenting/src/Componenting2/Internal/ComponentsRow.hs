@@ -3,29 +3,41 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE UndecidableSuperClasses #-}
 
-module Componenting2.Internal.ComponentsRow where
+module Componenting2.Internal.ComponentsRow
+  ( StartAllComponents (..), AllComponentsStartedWithMeta
+  , StopAllComponentsWithMeta (..), AllComponentsWithMetaStopped
+  , MapRowSndT, MapRowSnd (..)
+  , SelectKeysT, SelectKeys (..)
+  , DependenciesLabelsMap, ToDependenciesLabelsMap
+  ) where
 
 import Componenting2.Internal.Component (StartComponent (..), StopComponent (..), StartableWithDependencies)
-import Componenting2.Internal.Util (ListLabels, FstT, SndT)
+import Componenting2.Internal.Util (FstT, SndT)
 import Data.Kind (Type)
 import Data.Row ( Rec, Forall, Label (..), empty, (.!), type (.!), (.==)
                 , type (.==), (.+), type (.+), (.-), type (.\\)
                 )
-import Data.Row.Internal (Row (..), LT (..), Empty, Unconstrained1, Subset)
+import Data.Row.Internal (Row (..), LT (..), Labels, Empty, Unconstrained1, Subset)
 import Data.Row.Records (split)
 import GHC.TypeLits (Symbol, KnownSymbol)
 
 -- | Association list matching component labels to their dependencies' labels
-type DependenciesLabelsMap = [(Symbol, [Symbol])]
+type DependenciesLabelsMap = Row [Symbol]
 
 -- | Extract labels of all components in a row, alongside their dependencies' labels
 type family ToDependenciesLabelsMap
     (components :: Row Type)
     :: DependenciesLabelsMap where
-  ToDependenciesLabelsMap Empty = '[]
-  ToDependenciesLabelsMap ('R ((label ':-> compDef) ': pairs)) =
-    '(label, ListLabels (DependenciesSpec compDef))
-      ': ToDependenciesLabelsMap ('R pairs)
+  ToDependenciesLabelsMap ('R pairs) = 'R (GoToDependenciesLabelsMap pairs)
+
+type family GoToDependenciesLabelsMap
+    (pairs :: [LT Type])
+    :: [LT [Symbol]]
+  where
+  GoToDependenciesLabelsMap '[] = '[]
+  GoToDependenciesLabelsMap ((label ':-> compDef) ': pairs) =
+    (label ':-> Labels (DependenciesSpec compDef))
+      ': GoToDependenciesLabelsMap pairs
 
 -- | Select a set of labels from a row
 class

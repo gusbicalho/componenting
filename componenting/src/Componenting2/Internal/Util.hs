@@ -2,9 +2,22 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE UndecidableSuperClasses #-}
 
-module Componenting2.Internal.Util where
+module Componenting2.Internal.Util
+  ( All
+  , FstT
+  , SndT
+  , type (++)
+  , Concat
+  , Reverse
+  , RemoveLabels
+  , AllItemsKnown
+  , ItemKnown
+  , If
+  , MaybeConstrained
+  ) where
 
 import Data.Kind (Constraint, Type)
+import Data.Row.Internal (Row (..), type (.-))
 import GHC.TypeLits (Symbol, TypeError, ErrorMessage(..))
 
 class Anything (t :: k) where
@@ -18,6 +31,21 @@ type family All (constraints :: [k -> Constraint]) :: k -> Constraint where
   All '[constraint] = constraint
   All (constraint ': moreConstraints) = And constraint
                                             (All moreConstraints)
+
+type family UnMaybe (maybeT :: Type) :: Type where
+  UnMaybe (Maybe t) = t
+  UnMaybe t = TypeError ('Text "Expected Maybe t, found " ':<>: 'ShowType t)
+
+class (constraint (UnMaybe t)) =>
+  MaybeConstrained
+    (constraint :: Type -> Constraint)
+    (t :: Type)
+  where
+instance (constraint (UnMaybe t)) =>
+  MaybeConstrained
+    (constraint :: Type -> Constraint)
+    (t :: Type)
+  where
 
 type family If (cond :: Bool) (thenT :: k) (elseT :: k) :: k where
   If 'True thenT _ = thenT
@@ -83,23 +111,9 @@ type family ListLabels (labeledList :: [(Symbol, k)]) :: [Symbol] where
 
 type family RemoveLabels
     (labelsToRemove :: [Symbol])
-    (labeledList :: [(Symbol, k)])
-    :: [(Symbol, k)]
+    (row :: Row k)
+    :: Row k
   where
-    RemoveLabels _ '[] = '[]
-    RemoveLabels labelsToRemove ('(label, v) ': morePairs) =
-      If (ItemKnown labelsToRemove label)
-        (RemoveLabels labelsToRemove morePairs)
-        ('(label, v) ': RemoveLabels labelsToRemove morePairs)
-
-type family RenameLabel
-    (fromLabel :: Symbol)
-    (toLabel :: Symbol)
-    (labeledList :: [(Symbol, k)])
-    :: [(Symbol, k)]
-  where
-  RenameLabel fromLabel toLabel '[] = '[]
-  RenameLabel fromLabel toLabel ('(fromLabel, v) ': morePairs) =
-    '(toLabel, v) ': RenameLabel fromLabel toLabel morePairs
-  RenameLabel fromLabel toLabel (pair ': morePairs) =
-    pair ': RenameLabel fromLabel toLabel morePairs
+    RemoveLabels '[] row = row
+    RemoveLabels (label ': moreLabels) row =
+      RemoveLabels moreLabels (row .- label)

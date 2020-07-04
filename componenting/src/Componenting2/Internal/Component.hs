@@ -3,13 +3,19 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE UndecidableSuperClasses #-}
 
-module Componenting2.Internal.Component where
+module Componenting2.Internal.Component
+  ( StartComponent (..)
+  , StopComponent (..), stop
+  , StartableWithDependencies
+  , RenameDependency (..)
+  ) where
 
-import Data.Row (Row, Rec, Label (..), type (.!))
+import Data.Row (Rec, Label (..), type (.!))
 import Data.Row.Records (rename, Rename)
+import Data.Row.Internal (Row (..), LT (..))
 import Data.Kind (Constraint, Type)
 import GHC.TypeLits (Symbol, KnownSymbol)
-import Componenting2.Internal.Util (And, All, RenameLabel)
+import Componenting2.Internal.Util (All)
 
 class StartComponent
   (stoppedC :: Type)
@@ -61,7 +67,7 @@ instance
   type ComponentMeta (RenameDependency outerLabel innerLabel component)
     = (RenameDependency outerLabel innerLabel (ComponentMeta component))
   type DependenciesSpec (RenameDependency outerLabel innerLabel component)
-    = RenameLabel innerLabel outerLabel (DependenciesSpec component)
+    = Rename innerLabel outerLabel (DependenciesSpec component)
   type DependenciesConstraint (RenameDependency outerLabel innerLabel component) row =
     DependenciesConstraint component (Rename outerLabel innerLabel row)
 
@@ -85,13 +91,12 @@ instance
 
 -- Dependencies
 
-type DependenciesSpecKind = [(Symbol, Type -> Constraint)]
+type DependenciesSpecKind = Row (Type -> Constraint)
 
 type family DependenciesT (deps :: DependenciesSpecKind) :: [Row Type -> Constraint] where
-  DependenciesT '[] = '[]
-  DependenciesT ('(label, constraint) ': deps) =
-    Dependency label constraint ': DependenciesT deps
-
+  DependenciesT ('R '[]) = '[]
+  DependenciesT ('R ((label ':-> constraint) ': deps)) =
+    Dependency label constraint ': DependenciesT ('R deps)
 
 class
   (All (DependenciesT deps) row) =>

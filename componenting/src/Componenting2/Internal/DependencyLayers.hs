@@ -18,9 +18,10 @@ import Componenting2.Internal.ComponentsRow ( DependenciesLabelsMap
                                             , StartAllComponents (..), AllComponentsStartedWithMeta
                                             , StopAllComponentsWithMeta (..), AllComponentsWithMetaStopped
                                             )
-import Componenting2.Internal.Util (ListLabels, If, AllItemsKnown, RemoveLabels, type (++), Reverse, Concat)
+import Componenting2.Internal.Util (If, AllItemsKnown, RemoveLabels, type (++), Reverse, Concat)
 import Data.Kind (Type)
-import Data.Row (Row, Rec, type (.\\), type (.+), (.+), empty)
+import Data.Row (Rec, type (.\\), type (.+), (.+), empty, Empty)
+import Data.Row.Internal (Row (..), LT (..), Labels)
 import GHC.TypeLits (Symbol, TypeError, ErrorMessage (..))
 
 type Layer = [Symbol]
@@ -52,18 +53,18 @@ type family DependenciesLabelsMapToStartLayer
     (compDepsMap :: DependenciesLabelsMap)
     :: Layer
   where
-  DependenciesLabelsMapToStartLayer providedDeps '[] = '[]
-  DependenciesLabelsMapToStartLayer providedDeps ('(compLabel, requiredDeps) ': morePairs) =
+  DependenciesLabelsMapToStartLayer providedDeps ('R '[]) = '[]
+  DependenciesLabelsMapToStartLayer providedDeps ('R ((compLabel ':-> requiredDeps) ': morePairs)) =
     If (AllItemsKnown providedDeps requiredDeps)
-      (compLabel ': DependenciesLabelsMapToStartLayer providedDeps morePairs)
-      (DependenciesLabelsMapToStartLayer providedDeps morePairs)
+      (compLabel ': DependenciesLabelsMapToStartLayer providedDeps ('R morePairs))
+      (DependenciesLabelsMapToStartLayer providedDeps ('R morePairs))
 
 type family DependenciesLabelsMapToStartLayers
     (providedDeps :: [Symbol])
     (compDepsMap :: DependenciesLabelsMap)
     :: DependencyStartLayers
   where
-    DependenciesLabelsMapToStartLayers providedDeps '[] = '[]
+    DependenciesLabelsMapToStartLayers providedDeps Empty = '[]
     DependenciesLabelsMapToStartLayers providedDeps compDepsMap =
       NextStartLayer
         providedDeps
@@ -79,7 +80,7 @@ type family NextStartLayer
   NextStartLayer providedDeps compDepsMap '[] =
     TypeError
       ('Text "Unsolvable dependencies in system. These components have missing dependencies: " ':$$:
-       'ShowType (ListLabels compDepsMap) ':$$:
+       'ShowType (Labels compDepsMap) ':$$:
        'Text "even after starting these dependencies: " ':<>: 'ShowType providedDeps)
   NextStartLayer providedDeps compDepsMap startableComponents =
     startableComponents ': (DependenciesLabelsMapToStartLayers

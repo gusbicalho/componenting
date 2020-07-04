@@ -44,7 +44,7 @@ instance
   where
   type Started (System components) = RunningSystem components
   type ComponentMeta (System components) = ()
-  type DependenciesSpec (System components) = '[]
+  type DependenciesSpec (System components) = Empty
   start _ (System components) = do
     startedWithMeta <- startLayers @layers empty components
     pure $ RunningSystem @components (mapRowSnd startedWithMeta) startedWithMeta
