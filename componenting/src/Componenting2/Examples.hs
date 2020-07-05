@@ -6,6 +6,7 @@ module Componenting2.Examples where
 
 import Componenting2.Internal.Component
 import Componenting2.Internal.System
+import Componenting2.Internal.Util (maybeWith)
 import Data.Row (Rec, empty, (.!), (.==), type (.==), (.+), type (.+))
 
 data Msg = Msg String
@@ -47,10 +48,13 @@ instance StartComponent Bar
   type DependenciesSpec Bar
     = "show1" .== Show
    .+ "show2" .== Show
+  type OptionalDependenciesSpec Bar
+    = "wow" .== Integral
   start deps Bar = do
     putStrLn "Bar> start"
     putStrLn $ "Bar> show1: " <> show (deps .! #show1)
     putStrLn $ "Bar> show2: " <> show (deps .! #show2)
+    putStrLn $ "Bar> wow: " <> maybeWith "none" (show . toInteger) (deps .! #wow)
     pure StartedBar
 instance StopComponent StartedBar () where
   type Stopped StartedBar () = Bar

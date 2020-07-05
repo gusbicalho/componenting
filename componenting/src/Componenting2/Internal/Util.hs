@@ -13,12 +13,15 @@ module Componenting2.Internal.Util
   , AllItemsKnown
   , ItemKnown
   , If
-  , MaybeConstrained
+  , MaybeConstrained (..)
+  , MaybeSome (..), maybeWith
   ) where
 
 import Data.Kind (Constraint, Type)
+import Data.Row.Records (Rec, Label, (.!), type (.!))
 import Data.Row.Internal (Row (..), type (.-))
-import GHC.TypeLits (Symbol, TypeError, ErrorMessage(..))
+import Data.Void (Void, absurd)
+import GHC.TypeLits (Symbol, KnownSymbol, TypeError, ErrorMessage(..))
 
 class Anything (t :: k) where
 instance Anything t where
@@ -32,20 +35,46 @@ type family All (constraints :: [k -> Constraint]) :: k -> Constraint where
   All (constraint ': moreConstraints) = And constraint
                                             (All moreConstraints)
 
-type family UnMaybe (maybeT :: Type) :: Type where
-  UnMaybe (Maybe t) = t
-  UnMaybe t = TypeError ('Text "Expected Maybe t, found " ':<>: 'ShowType t)
+class ToMaybe t where
+  type MaybeContent t :: Type
+  toMaybe :: t -> Maybe (MaybeContent t)
 
-class (constraint (UnMaybe t)) =>
+instance ToMaybe (Maybe t) where
+  type MaybeContent (Maybe t) = t
+  toMaybe = id
+
+instance ToMaybe Void where
+  type MaybeContent Void = Void
+  toMaybe = absurd
+
+data MaybeSome (constraint :: Type -> Constraint) =
+  None
+  | forall t. constraint t => Some t
+
+maybeWith :: r -> (forall t. constraint t => t -> r) -> MaybeSome constraint -> r
+maybeWith onNone _ None = onNone
+maybeWith _ onSome (Some t) = onSome t
+
+class
   MaybeConstrained
     (constraint :: Type -> Constraint)
     (t :: Type)
   where
-instance (constraint (UnMaybe t)) =>
+  toMaybeSome :: t -> Maybe (MaybeSome constraint)
+instance
+  (constraint t) =>
   MaybeConstrained
-    (constraint :: Type -> Constraint)
-    (t :: Type)
+    constraint
+    (Maybe t)
   where
+  toMaybeSome Nothing = Nothing
+  toMaybeSome (Just t) = Just (Some t)
+instance
+  MaybeConstrained
+    constraint
+    ()
+  where
+  toMaybeSome () = Nothing
 
 type family If (cond :: Bool) (thenT :: k) (elseT :: k) :: k where
   If 'True thenT _ = thenT
@@ -84,6 +113,10 @@ type family SndT (pair :: Type) :: Type where
 type family IsEmpty (list :: [k]) :: Bool where
   IsEmpty '[] = 'True
   IsEmpty _ = 'False
+
+type family IsVoid (t :: Type) :: Bool where
+  IsVoid Void = 'True
+  IsVoid _ = 'False
 
 -- TODO use some type-level set to avoid n^2
 type family ItemKnown (knownItems :: [k]) (item :: k) :: Bool where

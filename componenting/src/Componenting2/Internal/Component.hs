@@ -1,3 +1,4 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -10,12 +11,12 @@ module Componenting2.Internal.Component
   , RenameDependency (..)
   ) where
 
-import Data.Row (Rec, Label (..), type (.!), Empty)
+import Data.Row (Rec, Label (..), type (.!), (.!), type (.==), (.==), type (.-), (.-), type (.+), (.+), type (.//), (.//), Empty)
 import Data.Row.Records (rename, Rename)
 import Data.Row.Internal (Row (..), LT (..))
 import Data.Kind (Constraint, Type)
 import GHC.TypeLits (Symbol, KnownSymbol)
-import Componenting2.Internal.Util (All)
+import Componenting2.Internal.Util (If, ItemKnown, All, MaybeConstrained, MaybeSome (..))
 
 class StartComponent
   (stoppedC :: Type)
@@ -29,16 +30,27 @@ class StartComponent
   type DependenciesSpec stoppedC = Empty
 
   type DependenciesConstraint stoppedC (row :: Row Type) :: Constraint
-  type DependenciesConstraint stoppedC row = Dependencies (DependenciesSpec stoppedC) row
+  type DependenciesConstraint stoppedC row =
+    All (DependenciesT Dependency (DependenciesSpec stoppedC)) row
 
-  startWithMeta :: DependenciesConstraint stoppedC row
+  type OptionalDependenciesSpec stoppedC :: DependenciesSpecKind
+  type OptionalDependenciesSpec stoppedC = Empty
+
+  type OptionalDependenciesConstraint stoppedC (row :: Row Type) :: Constraint
+  type OptionalDependenciesConstraint stoppedC row =
+    All (DependenciesT OptionalDependency (OptionalDependenciesSpec stoppedC)) row
+
+  startWithMeta :: ( DependenciesConstraint stoppedC row
+                   , OptionalDependenciesConstraint stoppedC row )
                 => Rec row -> stoppedC -> IO (ComponentMeta stoppedC, Started stoppedC)
   default startWithMeta :: ( DependenciesConstraint stoppedC row
+                           , OptionalDependenciesConstraint stoppedC row
                            , ComponentMeta stoppedC ~ () )
                         => Rec row -> stoppedC -> IO (ComponentMeta stoppedC, Started stoppedC)
   startWithMeta deps stoppedC = ((), ) <$> start deps stoppedC
 
-  start :: DependenciesConstraint stoppedC row
+  start :: ( DependenciesConstraint stoppedC row
+           , OptionalDependenciesConstraint stoppedC row )
         => Rec row -> stoppedC -> IO (Started stoppedC)
   start deps stoppedC = snd <$> startWithMeta deps stoppedC
 
@@ -74,6 +86,8 @@ instance
     = Rename innerLabel outerLabel (DependenciesSpec component)
   type DependenciesConstraint (RenameDependency outerLabel innerLabel component) row =
     DependenciesConstraint component (Rename outerLabel innerLabel row)
+  type OptionalDependenciesConstraint (RenameDependency outerLabel innerLabel component) row =
+    OptionalDependenciesConstraint component (Rename outerLabel innerLabel row)
 
   startWithMeta deps (RenameDependency component) = do
     let renameDeps = rename (Label @outerLabel) (Label @innerLabel) deps
@@ -93,24 +107,78 @@ instance
     stopped <- stopWithMeta meta runningComponent
     pure $ RenameDependency @outerLabel @innerLabel stopped
 
+-- Fill Optional Dependencies
+class FillOptionalDependencies
+  (optionalDeps :: DependenciesSpecKind)
+  (deps :: Row Type)
+  where
+  type OptionalDependenciesFilled optionalDeps deps :: Row Type
+  fillOptionalDependencies :: Rec deps -> Rec (OptionalDependenciesFilled optionalDeps deps)
+
+instance
+  FillOptionalDependencies
+    Empty
+    (deps :: Row Type)
+  where
+  type OptionalDependenciesFilled Empty deps = deps
+  fillOptionalDependencies deps = deps
+
+instance
+  ( KnownSymbol optionalDepName
+  , FillOptionalDependencies
+    ('R moreOptionalDeps)
+    Empty) =>
+  FillOptionalDependencies
+    ('R ((optionalDepName ':-> optionalDepConstraint) ': moreOptionalDeps))
+    Empty
+  where
+  type OptionalDependenciesFilled ('R ((optionalDepName ':-> optionalDepConstraint) ': moreOptionalDeps)) Empty =
+    optionalDepName .== MaybeSome optionalDepConstraint
+    .+ OptionalDependenciesFilled
+        ('R moreOptionalDeps)
+        Empty
+  fillOptionalDependencies deps =
+    Label @optionalDepName .== None @optionalDepConstraint
+    .+ fillOptionalDependencies @('R moreOptionalDeps) deps
+
+instance
+  ( KnownSymbol optionalDepName
+  , FillOptionalDependencies
+    ('R moreOptionalDeps)
+    ('R moreProvidedDeps)
+  , ('R moreProvidedDeps)
+    ~ ('R ((optionalDepName ':-> providedOptionalDep) ': moreProvidedDeps)
+        .- optionalDepName)
+  , optionalDepConstraint providedOptionalDep) =>
+  FillOptionalDependencies
+    ('R ((optionalDepName ':-> optionalDepConstraint) ': moreOptionalDeps))
+    ('R ((optionalDepName ':-> providedOptionalDep) ': moreProvidedDeps))
+  where
+  type OptionalDependenciesFilled
+    ('R ((optionalDepName ':-> optionalDepConstraint) ': moreOptionalDeps))
+    ('R ((optionalDepName ':-> providedOptionalDep) ': moreProvidedDeps)) =
+    optionalDepName .== MaybeSome optionalDepConstraint
+    .+ (OptionalDependenciesFilled
+        ('R moreOptionalDeps)
+        ('R moreProvidedDeps))
+  fillOptionalDependencies deps =
+    let label = Label @optionalDepName
+    in label .== Some @optionalDepConstraint (deps .! label)
+        .+ fillOptionalDependencies @('R moreOptionalDeps) (deps .- label)
+
+-- TODO wtf i dont even know
+
 -- Dependencies
 
 type DependenciesSpecKind = Row (Type -> Constraint)
 
-type family DependenciesT (deps :: DependenciesSpecKind) :: [Row Type -> Constraint] where
-  DependenciesT ('R '[]) = '[]
-  DependenciesT ('R ((label ':-> constraint) ': deps)) =
-    Dependency label constraint ': DependenciesT ('R deps)
-
-class
-  (All (DependenciesT deps) row) =>
-  Dependencies (deps :: DependenciesSpecKind) (row :: Row Type)
-  where
-instance
-  {-# OVERLAPPABLE #-}
-  (All (DependenciesT deps) row) =>
-  Dependencies (deps :: DependenciesSpecKind) (row :: Row Type)
-  where
+type family DependenciesT
+    (mkDepsConstraint :: Symbol -> specRowK -> depsK -> Constraint)
+    (depsSpec :: Row specRowK)
+    :: [depsK -> Constraint] where
+  DependenciesT mkDepsConstraint ('R '[]) = '[]
+  DependenciesT mkDepsConstraint ('R ((label ':-> constraint) ': depsSpec)) =
+    mkDepsConstraint label constraint ': DependenciesT mkDepsConstraint ('R depsSpec)
 
 class
   (constraint (row .! label)) =>
@@ -122,6 +190,17 @@ class
 instance
   (constraint (row .! label)) =>
   Dependency label constraint row where
+
+class
+  ((row .! label) ~ MaybeSome constraint) =>
+  OptionalDependency
+    (label :: Symbol)
+    (constraint :: Type -> Constraint)
+    (row :: Row Type)
+  where
+instance
+  ((row .! label) ~ MaybeSome constraint) =>
+  OptionalDependency label constraint row where
 
 class
   ( StartComponent comp
