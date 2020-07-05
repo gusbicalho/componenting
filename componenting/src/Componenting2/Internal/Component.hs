@@ -10,7 +10,7 @@ module Componenting2.Internal.Component
   , RenameDependency (..)
   ) where
 
-import Data.Row (Rec, Label (..), type (.!))
+import Data.Row (Rec, Label (..), type (.!), Empty)
 import Data.Row.Records (rename, Rename)
 import Data.Row.Internal (Row (..), LT (..))
 import Data.Kind (Constraint, Type)
@@ -21,8 +21,12 @@ class StartComponent
   (stoppedC :: Type)
   where
   type Started stoppedC :: Type
+
   type ComponentMeta stoppedC :: Type
+  type ComponentMeta stoppedC = ()
+
   type DependenciesSpec stoppedC :: DependenciesSpecKind
+  type DependenciesSpec stoppedC = Empty
 
   type DependenciesConstraint stoppedC (row :: Row Type) :: Constraint
   type DependenciesConstraint stoppedC row = Dependencies (DependenciesSpec stoppedC) row
